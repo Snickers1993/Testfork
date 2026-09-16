@@ -1,0 +1,48 @@
+name: Moonveil local state recovery
+
+on:
+  push:
+    branches: [Module-1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    if: github.repository == 'Snickers1993/Testfork'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Recover implementation transfer blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir recovery
+          for spec in \
+            '9cbfcfb6bc407dfb21079b74dcc0d265bd98263c:blob1.gz' \
+            '3896d0951151dd9e02ab8fa249c34077d443402b:blob2.gz' \
+            '993189a0c17dd2baf8d6e26122171c3ed513d606:blob3.gz'
+          do
+            sha="${spec%%:*}"
+            name="${spec##*:}"
+            gh api "repos/${REPO}/git/blobs/${sha}" --jq .content \
+              | tr -d '\n' \
+              | base64 --decode > "recovery/${name}"
+          done
+          file recovery/*
+          sha256sum recovery/* > recovery/SHA256SUMS.txt
+          for f in recovery/*.gz; do
+            gzip -t "$f"
+            gzip -dc "$f" > "${f%.gz}.raw"
+          done
+          file recovery/*.raw > recovery/RAW_FILE_TYPES.txt
+          ls -lh recovery > recovery/CONTENTS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moonveil-local-state-recovery-${{ github.sha }}
+          path: recovery
+          retention-days: 1
