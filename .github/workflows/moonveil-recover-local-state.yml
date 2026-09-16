@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Recover implementation transfer blobs
+      - name: Recover implementation transfer archive
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -22,24 +22,22 @@ jobs:
         run: |
           set -euo pipefail
           mkdir recovery
-          for spec in \
-            '9cbfcfb6bc407dfb21079b74dcc0d265bd98263c:blob1.gz' \
-            '3896d0951151dd9e02ab8fa249c34077d443402b:blob2.gz' \
-            '993189a0c17dd2baf8d6e26122171c3ed513d606:blob3.gz'
+          i=0
+          for sha in \
+            9cbfcfb6bc407dfb21079b74dcc0d265bd98263c \
+            3896d0951151dd9e02ab8fa249c34077d443402b \
+            993189a0c17dd2baf8d6e26122171c3ed513d606
           do
-            sha="${spec%%:*}"
-            name="${spec##*:}"
+            i=$((i+1))
             gh api "repos/${REPO}/git/blobs/${sha}" --jq .content \
               | tr -d '\n' \
-              | base64 --decode > "recovery/${name}"
+              | base64 --decode > "recovery/chunk${i}.bin"
           done
-          file recovery/*
+          cat recovery/chunk1.bin recovery/chunk2.bin recovery/chunk3.bin > recovery/moonveil-local-state.gz
+          gzip -t recovery/moonveil-local-state.gz
+          gzip -dc recovery/moonveil-local-state.gz > recovery/moonveil-local-state.raw
+          file recovery/* > recovery/FILE_TYPES.txt
           sha256sum recovery/* > recovery/SHA256SUMS.txt
-          for f in recovery/*.gz; do
-            gzip -t "$f"
-            gzip -dc "$f" > "${f%.gz}.raw"
-          done
-          file recovery/*.raw > recovery/RAW_FILE_TYPES.txt
           ls -lh recovery > recovery/CONTENTS.txt
       - uses: actions/upload-artifact@v4
         with:
