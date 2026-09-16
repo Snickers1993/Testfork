@@ -1,0 +1,87 @@
+name: Moonveil Module 1
+
+on:
+  push:
+    branches: [Module-1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moonveil-module-1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    if: github.repository == 'Snickers1993/Testfork' && github.ref == 'refs/heads/Module-1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # A source/dependency snapshot makes offline review possible. No .git,
+      # credentials, caches, user data, or Codex home are included.
+      - name: Package offline review snapshot
+        run: |
+          git archive HEAD > /tmp/moonveil-source.tar
+          tar -rf /tmp/moonveil-source.tar node_modules
+          gzip /tmp/moonveil-source.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moonveil-offline-review-${{ github.sha }}
+          path: /tmp/moonveil-source.tar.gz
+          retention-days: 3
+      - name: TypeScript
+        run: npm run typecheck
+      - name: Lint
+        if: '!cancelled()'
+        run: npm run lint
+      - name: Frontend tests
+        if: '!cancelled()'
+        run: npm run test
+      - name: Production frontend
+        if: '!cancelled()'
+        run: npm run build
+
+  windows:
+    if: github.repository == 'Snickers1993/Testfork' && github.ref == 'refs/heads/Module-1'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: moonveil-windows-${{ hashFiles('src-tauri/Cargo.lock') }}
+      - run: choco install cmake llvm -y --no-progress
+      - name: Configure LLVM
+        shell: pwsh
+        run: |
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+      - run: npm ci
+      - name: Rust check
+        working-directory: src-tauri
+        run: cargo check --locked
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --locked
+      - name: Tauri Windows compilation (not GUI/runtime verification)
+        run: npm run tauri -- build --debug --no-bundle --config src-tauri/tauri.windows.conf.json
