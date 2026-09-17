@@ -37,7 +37,7 @@ function buildUserInputConversationItem(
       id,
       header: asString(question.header).trim(),
       question: asString(question.question).trim(),
-      answers,
+      answers: question.isSecret && answers.length ? ["[Provided to Codex]"] : answers,
     };
   });
   const extra = Object.entries(answered)
@@ -91,6 +91,7 @@ export function useThreadUserInput({ dispatch }: UseThreadUserInputOptions) {
         request.workspace_id,
         request.request_id,
         response.answers,
+        ...(request.request_token ? [request.request_token] : []),
       );
       const item = buildUserInputConversationItem(request, response);
       dispatch({
@@ -101,6 +102,7 @@ export function useThreadUserInput({ dispatch }: UseThreadUserInputOptions) {
       });
       dispatch({
         type: "removeUserInputRequest",
+        ...(request.session_id ? { sessionId: request.session_id } : {}),
         requestId: request.request_id,
         workspaceId: request.workspace_id,
       });

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { APP_UPDATES_AVAILABLE } from "../updateAvailability";
 import { isTauri } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -62,10 +63,11 @@ type UseUpdaterOptions = {
 };
 
 export function useUpdater({
-  enabled = true,
+  enabled: requestedEnabled = true,
   autoCheckOnMount = true,
   onDebug,
 }: UseUpdaterOptions) {
+  const enabled = requestedEnabled && APP_UPDATES_AVAILABLE;
   const [state, setState] = useState<UpdateState>({ stage: "idle" });
   const [postUpdateNotice, setPostUpdateNotice] = useState<PostUpdateNoticeState>(
     null,

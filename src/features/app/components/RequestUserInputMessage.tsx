@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   RequestUserInputRequest,
   RequestUserInputResponse,
@@ -11,7 +11,7 @@ type RequestUserInputMessageProps = {
   onSubmit: (
     request: RequestUserInputRequest,
     response: RequestUserInputResponse,
-  ) => void;
+  ) => void | Promise<void>;
 };
 
 type SelectionState = Record<string, number | null>;
@@ -40,6 +40,8 @@ export function RequestUserInputMessage({
     [requests, activeThreadId, activeWorkspaceId],
   );
   const activeRequest = activeRequests[0];
+  const submitted = useRef(new WeakSet<RequestUserInputRequest>());
+  const [submission, setSubmission] = useState<{ request: RequestUserInputRequest; error?: string } | null>(null);
   const [selections, setSelections] = useState<SelectionState>({});
   const [notes, setNotes] = useState<NotesState>({});
 
@@ -107,8 +109,12 @@ export function RequestUserInputMessage({
     setNotes((current) => ({ ...current, [questionId]: value }));
   };
 
-  const handleSubmit = () => {
-    onSubmit(activeRequest, { answers: buildAnswers() });
+  const handleSubmit = async () => {
+    if (submitted.current.has(activeRequest)) return;
+    submitted.current.add(activeRequest);
+    setSubmission({ request: activeRequest });
+    try { await onSubmit(activeRequest, { answers: buildAnswers() }); }
+    catch (error) { setSubmission({ request: activeRequest, error: `Response could not be confirmed: ${String(error)}. Reconnect to refresh.` }); }
   };
 
   return (
@@ -170,7 +176,9 @@ export function RequestUserInputMessage({
                       ))}
                     </div>
                   ) : null}
-                  <textarea
+                  {question.isSecret ? (
+                    <input type="password" autoComplete="off" aria-label={question.question} value={notes[questionId] ?? ""} onChange={(event) => handleNotesChange(questionId, event.target.value)} />
+                  ) : <textarea
                     className="request-user-input-notes"
                     placeholder={notePlaceholder}
                     value={notes[questionId] ?? ""}
@@ -178,7 +186,7 @@ export function RequestUserInputMessage({
                       handleNotesChange(questionId, event.target.value)
                     }
                     rows={2}
-                  />
+                  />}
                 </section>
               );
             })
@@ -188,8 +196,9 @@ export function RequestUserInputMessage({
             </div>
           )}
         </div>
+        {submission?.request === activeRequest && submission.error ? <div role="alert">{submission.error}</div> : null}
         <div className="request-user-input-actions">
-          <button className="primary" onClick={handleSubmit}>
+          <button className="primary" disabled={submission?.request === activeRequest} onClick={() => { void handleSubmit(); }}>
             Submit
           </button>
         </div>

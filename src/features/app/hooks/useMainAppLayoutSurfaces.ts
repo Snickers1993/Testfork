@@ -1,3 +1,4 @@
+import type { MoonveilGuildProps } from "@/features/moonveil/types";
 import type { RefObject } from "react";
 import type { AppSettings, ComposerEditorSettings, WorkspaceInfo } from "@/types";
 import type { ThreadState } from "@/features/threads/hooks/useThreadsReducer";
@@ -123,6 +124,7 @@ type UseMainAppLayoutSurfacesArgs = {
   startUncommittedReview: (workspaceId: string | null) => void;
   handleAddWorkspace: () => void;
   openWorkspaceFromUrlPrompt: () => void;
+  onCreateMoonveilThread: MoonveilGuildProps["onCreateThread"];
   handleAddAgent: SidebarProps["onAddAgent"];
   handleAddWorktreeAgent: SidebarProps["onAddWorktreeAgent"];
   handleAddCloneAgent: SidebarProps["onAddCloneAgent"];
@@ -296,6 +298,7 @@ function buildPrimarySurface({
   openAppIconById,
   handleAddWorkspace,
   openWorkspaceFromUrlPrompt,
+  onCreateMoonveilThread,
   handleAddAgent,
   handleAddWorktreeAgent,
   handleAddCloneAgent,
@@ -597,6 +600,11 @@ function buildPrimarySurface({
       accountRateLimits: homeRateLimits,
       usageShowRemaining: appSettings.usageShowRemaining,
       accountInfo: homeAccount,
+      moonveilWorkspaces: workspaces,
+      moonveilThreadsByWorkspace: threadsByWorkspace,
+      moonveilActiveWorkspaceId: activeWorkspaceId,
+      moonveilActiveThreadId: activeThreadId,
+      onCreateMoonveilThread,
       onSelectThread: (workspaceId, threadId) => {
         threadNavigation.exitDiffView();
         threadNavigation.clearDraftState();
@@ -1007,6 +1015,7 @@ export function useMainAppLayoutSurfaces({
   startUncommittedReview,
   handleAddWorkspace,
   openWorkspaceFromUrlPrompt,
+  onCreateMoonveilThread,
   handleAddAgent,
   handleAddWorktreeAgent,
   handleAddCloneAgent,
@@ -1169,6 +1178,7 @@ export function useMainAppLayoutSurfaces({
     startUncommittedReview,
     handleAddWorkspace,
     openWorkspaceFromUrlPrompt,
+    onCreateMoonveilThread,
     handleAddAgent,
     handleAddWorktreeAgent,
     handleAddCloneAgent,

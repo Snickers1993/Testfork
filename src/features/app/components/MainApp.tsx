@@ -1,3 +1,4 @@
+import type { MoonveilCompanion } from "@/features/moonveil/types";
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import successSoundUrl from "@/assets/success-notification.mp3";
 import errorSoundUrl from "@/assets/error-notification.mp3";
@@ -172,7 +173,6 @@ export default function MainApp() {
     queueSaveSettings,
   });
   const {
-    isMobileRuntime,
     showMobileSetupWizard,
     mobileSetupWizardProps,
     handleMobileConnectSuccess,
@@ -182,7 +182,8 @@ export default function MainApp() {
     queueSaveSettings,
     refreshWorkspaces,
   });
-  const updaterEnabled = !isMobileRuntime;
+  // Moonveil must never consume CodexMonitor upstream app updates.
+  const updaterEnabled = false;
 
   const workspacesById = useMemo(
     () => new Map(workspaces.map((workspace) => [workspace.id, workspace])),
@@ -889,6 +890,24 @@ export default function MainApp() {
     setCenterMode,
     setSelectedDiffPath,
   });
+
+  const handleCreateMoonveilThread = useCallback(
+    async (workspaceId: string, companion: MoonveilCompanion) => {
+      const workspace = workspaces.find((entry) => entry.id === workspaceId);
+      if (!workspace) {
+        throw new Error("Moonveil project is no longer available.");
+      }
+      if (!workspace.connected) {
+        await connectWorkspace(workspace);
+      }
+      // GuildHall persists the association before using ordinary thread navigation.
+      return startThreadForWorkspace(workspaceId, {
+        activate: false,
+        developerInstructions: companion.instructions,
+      });
+    },
+    [connectWorkspace, startThreadForWorkspace, workspaces],
+  );
 
   const resolveCloneProjectContext = useCallback(
     (workspace: WorkspaceInfo) => {
@@ -1688,6 +1707,7 @@ export default function MainApp() {
     startUncommittedReview,
     handleAddWorkspace,
     openWorkspaceFromUrlPrompt,
+    onCreateMoonveilThread: handleCreateMoonveilThread,
     handleAddAgent,
     handleAddWorktreeAgent,
     handleAddCloneAgent,

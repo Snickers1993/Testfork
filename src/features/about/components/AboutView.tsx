@@ -2,77 +2,34 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-const GITHUB_URL = "https://github.com/Dimillian/CodexMonitor";
-const TWITTER_URL = "https://x.com/dimillian";
+const MOONVEIL_URL = "https://github.com/Snickers1993/Testfork/tree/Module-1";
+const UPSTREAM_URL = "https://github.com/Dimillian/CodexMonitor";
 
 export function AboutView() {
   const [version, setVersion] = useState<string | null>(null);
 
-  const handleOpenGitHub = () => {
-    void openUrl(GITHUB_URL);
-  };
-
-  const handleOpenTwitter = () => {
-    void openUrl(TWITTER_URL);
-  };
-
   useEffect(() => {
     let active = true;
-    const fetchVersion = async () => {
-      try {
-        const value = await getVersion();
-        if (active) {
-          setVersion(value);
-        }
-      } catch {
-        if (active) {
-          setVersion(null);
-        }
-      }
-    };
-
-    void fetchVersion();
-    return () => {
-      active = false;
-    };
+    void getVersion().then((value) => active && setVersion(value)).catch(() => active && setVersion(null));
+    return () => { active = false; };
   }, []);
 
   return (
     <div className="about">
       <div className="about-card">
         <div className="about-header">
-          <img
-            className="about-icon"
-            src="/app-icon.png"
-            alt="Codex Monitor icon"
-          />
-          <div className="about-title">Codex Monitor</div>
+          <img className="about-icon" src="/moonveil/moonvale-emblem.svg" alt="Moonveil emblem" />
+          <div className="about-title">Moonveil</div>
         </div>
-        <div className="about-version">
-          {version ? `Version ${version}` : "Version —"}
-        </div>
-        <div className="about-tagline">
-          Monitor the situation of your Codex agents
-        </div>
+        <div className="about-version">{version ? `Version ${version}` : "Version —"}</div>
+        <div className="about-tagline">A personal Codex workstation with a magical guild.</div>
         <div className="about-divider" />
         <div className="about-links">
-          <button
-            type="button"
-            className="about-link"
-            onClick={handleOpenGitHub}
-          >
-            GitHub
-          </button>
+          <button type="button" className="about-link" onClick={() => void openUrl(MOONVEIL_URL)}>Moonveil source</button>
           <span className="about-link-sep">|</span>
-          <button
-            type="button"
-            className="about-link"
-            onClick={handleOpenTwitter}
-          >
-            Twitter
-          </button>
+          <button type="button" className="about-link" onClick={() => void openUrl(UPSTREAM_URL)}>CodexMonitor upstream</button>
         </div>
-        <div className="about-footer">Made with ♥ by Codex & Dimillian</div>
+        <div className="about-footer">Built on CodexMonitor. Codex remains the execution and security authority.</div>
       </div>
     </div>
   );

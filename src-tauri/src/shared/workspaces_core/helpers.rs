@@ -155,11 +155,9 @@ mod tests {
         copy_agents_md_from_parent_to_worktree, normalize_workspace_path_input,
         workspace_path_to_string, AGENTS_MD_FILE_NAME,
     };
+    use crate::codex::home::HOME_ENV_LOCK;
     use std::path::PathBuf;
-    use std::sync::Mutex;
     use uuid::Uuid;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn make_temp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("codex-monitor-{}", Uuid::new_v4()));
@@ -209,9 +207,11 @@ mod tests {
 
     #[test]
     fn normalize_workspace_path_input_expands_home_prefix() {
-        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _guard = HOME_ENV_LOCK.lock().expect("lock env");
         let previous_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", "/tmp/cm-home");
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
+        std::env::set_var("USERPROFILE", "/tmp/cm-home");
 
         assert_eq!(
             normalize_workspace_path_input("~/dev/repo"),
@@ -221,6 +221,10 @@ mod tests {
         match previous_home {
             Some(value) => std::env::set_var("HOME", value),
             None => std::env::remove_var("HOME"),
+        }
+        match previous_userprofile {
+            Some(value) => std::env::set_var("USERPROFILE", value),
+            None => std::env::remove_var("USERPROFILE"),
         }
     }
 

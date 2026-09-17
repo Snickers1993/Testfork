@@ -1,7 +1,7 @@
 {
-  "name": "codex-monitor",
+  "name": "moonveil",
   "private": true,
-  "version": "0.7.68",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "sync:material-icons": "node scripts/sync-material-icons.mjs",
@@ -72,5 +72,6 @@
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
     "vitest": "^3.2.4"
-  }
+  },
+  "description": "Moonveil \u2014 a fantasy-themed personal Codex desktop client built on CodexMonitor"
 }

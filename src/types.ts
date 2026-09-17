@@ -387,6 +387,8 @@ export type CodexUpdateResult = {
 export type ApprovalRequest = {
   workspace_id: string;
   request_id: number | string;
+  request_token?: string;
+  session_id?: string;
   method: string;
   params: Record<string, unknown>;
 };
@@ -401,6 +403,7 @@ export type RequestUserInputQuestion = {
   header: string;
   question: string;
   isOther?: boolean;
+  isSecret?: boolean;
   options?: RequestUserInputOption[];
 };
 
@@ -414,6 +417,8 @@ export type RequestUserInputParams = {
 export type RequestUserInputRequest = {
   workspace_id: string;
   request_id: number | string;
+  request_token?: string;
+  session_id?: string;
   params: RequestUserInputParams;
 };
 

@@ -230,7 +230,7 @@ export function SettingsCodexSection({
   return (
     <SettingsSection
       title="Codex"
-      subtitle="Configure the Codex CLI used by CodexMonitor and validate the install."
+      subtitle="Configure the Codex CLI used by Moonveil and validate the install."
     >
       <div className="settings-field">
         <label className="settings-field-label" htmlFor="codex-path">
@@ -261,7 +261,10 @@ export function SettingsCodexSection({
             Use PATH
           </button>
         </div>
-        <div className="settings-help">Leave empty to use the system PATH resolution.</div>
+        <div className="settings-help">
+          Leave empty to use the system PATH resolution. On Windows, select the native
+          codex.exe; official npm installations are resolved without running shell wrappers.
+        </div>
         <label className="settings-field-label" htmlFor="codex-args">
           Default Codex args
         </label>

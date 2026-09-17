@@ -198,6 +198,21 @@ export function useThreadEventHandlers({
   const onAppServerEvent = useCallback(
     (event: AppServerEvent) => {
       const method = getAppServerRawMethod(event) ?? "";
+      const sessionId = typeof event.message.moonveilSessionId === "string" ? event.message.moonveilSessionId : undefined;
+      const params = event.message.params as Record<string, unknown> | undefined;
+      if (method === "codex/disconnected") {
+        dispatch({ type: "clearServerRequests", workspaceId: event.workspace_id, sessionId });
+      } else if (method === "serverRequest/resolved" && params && (typeof params.requestId === "string" || typeof params.requestId === "number")) {
+        dispatch({ type: "clearServerRequests", workspaceId: event.workspace_id, sessionId, requestId: params.requestId });
+      } else if (["turn/completed", "thread/closed", "thread/archived"].includes(method) && params) {
+        const threadId = params.threadId ?? params.thread_id;
+        const turn = params.turn as Record<string, unknown> | undefined;
+        const turnId = turn?.id ?? params.turnId ?? params.turn_id;
+        if (typeof threadId === "string" && (method !== "turn/completed" || typeof turnId === "string")) {
+          dispatch({ type: "clearServerRequests", workspaceId: event.workspace_id, sessionId, threadId,
+            ...(method === "turn/completed" ? { turnId: turnId as string } : {}) });
+        }
+      }
       const inferredSource = method === "codex/stderr" ? "stderr" : "event";
       onDebug?.({
         id: `${Date.now()}-server-event`,
@@ -207,7 +222,7 @@ export function useThreadEventHandlers({
         payload: event,
       });
     },
-    [onDebug],
+    [onDebug, dispatch],
   );
 
   const handlers = useMemo(

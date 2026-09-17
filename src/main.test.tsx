@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sentryInitMock = vi.fn();
 const sentryMetricsCountMock = vi.fn();
@@ -26,36 +26,35 @@ vi.mock("./App", () => ({
   default: () => null,
 }));
 
-describe("main sentry bootstrap", () => {
+describe("Moonveil telemetry bootstrap", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.stubEnv("VITE_SENTRY_DSN", "");
     sentryInitMock.mockClear();
     sentryMetricsCountMock.mockClear();
     createRootMock.mockClear();
     renderMock.mockClear();
     document.body.innerHTML = '<div id="root"></div>';
   });
+  afterEach(() => vi.unstubAllEnvs());
 
-  it("initializes sentry and records app_open", async () => {
+  it("starts without initializing or sending inherited telemetry", async () => {
     await import("./main");
+    expect(sentryInitMock).not.toHaveBeenCalled();
+    expect(sentryMetricsCountMock).not.toHaveBeenCalled();
+    expect(renderMock).toHaveBeenCalledTimes(1);
+  });
 
-    expect(sentryInitMock).toHaveBeenCalledTimes(1);
-    expect(sentryInitMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dsn: expect.stringContaining("ingest.us.sentry.io"),
-        enabled: true,
-        release: expect.any(String),
-      }),
-    );
-    expect(sentryMetricsCountMock).toHaveBeenCalledTimes(1);
-    expect(sentryMetricsCountMock).toHaveBeenCalledWith(
-      "app_open",
-      1,
-      expect.objectContaining({
-        attributes: expect.objectContaining({
-          platform: "macos",
-        }),
-      }),
+  it("uses only an explicitly configured telemetry endpoint", async () => {
+    vi.stubEnv("VITE_SENTRY_DSN", "https://public@example.invalid/1");
+    await import("./main");
+    expect(sentryInitMock).toHaveBeenCalledExactlyOnceWith({
+      dsn: "https://public@example.invalid/1",
+      enabled: true,
+      release: expect.any(String),
+    });
+    expect(sentryMetricsCountMock).toHaveBeenCalledExactlyOnceWith(
+      "app_open", 1, { attributes: { env: import.meta.env.MODE } },
     );
   });
 });

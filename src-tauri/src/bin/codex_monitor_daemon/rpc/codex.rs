@@ -35,7 +35,12 @@ pub(super) async fn try_handle(
                 Ok(value) => value,
                 Err(err) => return Some(Err(err)),
             };
-            Some(state.start_thread(workspace_id).await)
+            let developer_instructions = match params.get("developerInstructions") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(value)) => Some(value.clone()),
+                Some(_) => return Some(Err("developerInstructions must be a string".to_string())),
+            };
+            Some(state.start_thread(workspace_id, developer_instructions).await)
         }
         "resume_thread" => {
             let workspace_id = match parse_string(params, "workspaceId") {

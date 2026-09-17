@@ -15,3 +15,5 @@ pub(crate) mod settings_core;
 pub(crate) mod workspace_rpc;
 pub(crate) mod workspaces_core;
 pub(crate) mod worktree_core;
+
+pub(crate) mod server_requests;

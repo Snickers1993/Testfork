@@ -7,6 +7,9 @@ import type { DebugEntry } from "../../../types";
 import { useUpdater } from "./useUpdater";
 import { STORAGE_KEY_PENDING_POST_UPDATE_VERSION } from "../utils/postUpdateRelease";
 
+// Exercise the retained updater implementation with a configured release feed.
+vi.mock("../updateAvailability", () => ({ APP_UPDATES_AVAILABLE: true }));
+
 vi.mock("@tauri-apps/api/core", () => ({
   isTauri: vi.fn(() => true),
 }));

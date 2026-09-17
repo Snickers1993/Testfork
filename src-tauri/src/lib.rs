@@ -44,21 +44,22 @@ mod workspaces;
 static EXIT_CLEANUP_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 #[cfg(desktop)]
-fn keep_daemon_running_after_close(app_handle: &tauri::AppHandle) -> bool {
+async fn stop_managed_processes_for_exit(app_handle: tauri::AppHandle) {
     let state = app_handle.state::<state::AppState>();
-    tauri::async_runtime::block_on(async {
-        state
-            .app_settings
-            .lock()
-            .await
-            .keep_daemon_running_after_app_close
-    })
-}
-
-#[cfg(desktop)]
-async fn stop_managed_daemons_for_exit(app_handle: tauri::AppHandle) {
-    let state = app_handle.state::<state::AppState>();
-    let _ = tailscale::tailscale_daemon_stop(state).await;
+    // Workspaces share an app-server. Drain and stop each native child once,
+    // including when the separately managed remote daemon stays running.
+    let sessions = std::mem::take(&mut *state.sessions.lock().await);
+    let mut stopped = std::collections::HashSet::new();
+    for session in sessions.into_values() {
+        if stopped.insert(std::sync::Arc::as_ptr(&session) as usize) {
+            let mut child = session.child.lock().await;
+            shared::process_core::kill_child_process_tree(&mut child).await;
+        }
+    }
+    let keep_daemon = state.app_settings.lock().await.keep_daemon_running_after_app_close;
+    if !keep_daemon {
+        let _ = tailscale::tailscale_daemon_stop(state).await;
+    }
 }
 
 #[tauri::command]
@@ -312,14 +313,12 @@ pub fn run() {
     app.run(|app_handle, event| {
         #[cfg(desktop)]
         if let RunEvent::ExitRequested { api, .. } = event {
-            if !EXIT_CLEANUP_IN_PROGRESS.load(Ordering::SeqCst)
-                && !keep_daemon_running_after_close(app_handle)
-            {
+            if !EXIT_CLEANUP_IN_PROGRESS.load(Ordering::SeqCst) {
                 api.prevent_exit();
                 EXIT_CLEANUP_IN_PROGRESS.store(true, Ordering::SeqCst);
                 let app_handle = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    stop_managed_daemons_for_exit(app_handle.clone()).await;
+                    stop_managed_processes_for_exit(app_handle.clone()).await;
                     app_handle.exit(0);
                 });
             }

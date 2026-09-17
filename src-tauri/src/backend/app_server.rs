@@ -15,12 +15,11 @@ use tokio::time::timeout;
 use crate::backend::events::{AppServerEvent, EventSink};
 use crate::codex::args::parse_codex_args;
 use crate::shared::process_core::{kill_child_process_tree, tokio_command};
+use crate::shared::server_requests::{request_key, take_response, PendingServerRequest};
 use crate::types::WorkspaceEntry;
 
 #[cfg(target_os = "windows")]
-use crate::shared::process_core::{build_cmd_c_command, resolve_windows_executable};
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
+use crate::shared::process_core::resolve_windows_codex_executable;
 
 fn extract_thread_id(value: &Value) -> Option<String> {
     fn extract_from_container(container: Option<&Value>) -> Option<String> {
@@ -28,6 +27,7 @@ fn extract_thread_id(value: &Value) -> Option<String> {
         container
             .get("threadId")
             .or_else(|| container.get("thread_id"))
+            .or_else(|| container.get("conversationId"))
             .and_then(|t| t.as_str())
             .map(|s| s.to_string())
             .or_else(|| {
@@ -79,14 +79,12 @@ fn extract_related_thread_ids(value: &Value) -> Vec<String> {
         push_thread_id(out, record.get("id"));
         push_thread_id(
             out,
-            record
-                .get("thread")
-                .and_then(|thread| {
-                    thread
-                        .get("id")
-                        .or_else(|| thread.get("threadId"))
-                        .or_else(|| thread.get("thread_id"))
-                }),
+            record.get("thread").and_then(|thread| {
+                thread
+                    .get("id")
+                    .or_else(|| thread.get("threadId"))
+                    .or_else(|| thread.get("thread_id"))
+            }),
         );
     }
 
@@ -94,12 +92,16 @@ fn extract_related_thread_ids(value: &Value) -> Vec<String> {
         let Some(container) = container.and_then(|value| value.as_object()) else {
             return;
         };
-        push_thread_id(out, container.get("threadId").or_else(|| container.get("thread_id")));
         push_thread_id(
             out,
             container
-                .get("thread")
-                .and_then(|thread| thread.get("id")),
+                .get("threadId")
+                .or_else(|| container.get("thread_id"))
+                .or_else(|| container.get("conversationId")),
+        );
+        push_thread_id(
+            out,
+            container.get("thread").and_then(|thread| thread.get("id")),
         );
         push_thread_id(
             out,
@@ -149,7 +151,10 @@ fn extract_related_thread_ids(value: &Value) -> Vec<String> {
                 .or_else(|| container.get("agent_statuses")),
             out,
         );
-        if let Some(status_map) = container.get("statuses").and_then(|value| value.as_object()) {
+        if let Some(status_map) = container
+            .get("statuses")
+            .and_then(|value| value.as_object())
+        {
             out.extend(
                 status_map
                     .keys()
@@ -192,10 +197,8 @@ fn normalize_root_path(value: &str) -> String {
     }
 
     let bytes = normalized.as_bytes();
-    let is_drive_path = bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && bytes[2] == b'/';
+    let is_drive_path =
+        bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/';
     if is_drive_path || normalized.starts_with("//") {
         normalized.to_ascii_lowercase()
     } else {
@@ -389,7 +392,11 @@ fn should_suppress_hidden_thread_event(
     !has_result_or_error
         && !matches!(
             method_name,
-            Some("thread/archived") | Some("codex/backgroundThread")
+            Some("thread/archived")
+                | Some("codex/backgroundThread")
+                | Some("serverRequest/resolved")
+                | Some("turn/completed")
+                | Some("thread/closed")
         )
 }
 
@@ -420,7 +427,7 @@ fn build_initialize_params(client_version: &str) -> Value {
     json!({
         "clientInfo": {
             "name": "codex_monitor",
-            "title": "Codex Monitor",
+            "title": "Moonveil",
             "version": client_version
         },
         "capabilities": {
@@ -432,10 +439,12 @@ fn build_initialize_params(client_version: &str) -> Value {
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub(crate) struct WorkspaceSession {
+    pub(crate) session_id: String,
     pub(crate) codex_args: Option<String>,
     pub(crate) child: Mutex<Child>,
     pub(crate) stdin: Mutex<ChildStdin>,
     pub(crate) pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
+    pub(crate) server_requests: Mutex<HashMap<String, PendingServerRequest>>,
     pub(crate) request_context: Mutex<HashMap<u64, RequestContext>>,
     pub(crate) thread_workspace: Mutex<HashMap<String, String>>,
     pub(crate) hidden_thread_ids: Mutex<HashSet<String>>,
@@ -473,6 +482,10 @@ impl WorkspaceSession {
     }
 
     pub(crate) async fn unregister_workspace(&self, workspace_id: &str) {
+        self.server_requests
+            .lock()
+            .await
+            .retain(|_, request| request.workspace_id != workspace_id);
         self.workspace_ids.lock().await.remove(workspace_id);
         self.workspace_roots.lock().await.remove(workspace_id);
     }
@@ -554,9 +567,17 @@ impl WorkspaceSession {
         self.write_message(value).await
     }
 
-    pub(crate) async fn send_response(&self, id: Value, result: Value) -> Result<(), String> {
-        self.write_message(json!({ "id": id, "result": result }))
-            .await
+    pub(crate) async fn send_response(
+        &self,
+        workspace_id: &str,
+        id: Value,
+        result: Value,
+    ) -> Result<(), String> {
+        let message = {
+            let mut pending = self.server_requests.lock().await;
+            take_response(&mut pending, workspace_id, &id, &result)?
+        };
+        self.write_message(message).await
     }
 }
 
@@ -659,29 +680,10 @@ pub(crate) fn build_codex_command_with_bin(
 
     #[cfg(target_os = "windows")]
     let mut command = {
-        let bin_trimmed = bin.trim();
-        let resolved = resolve_windows_executable(bin_trimmed, path_env.as_deref());
-        let resolved_path = resolved
-            .as_deref()
-            .unwrap_or_else(|| Path::new(bin_trimmed));
-        let ext = resolved_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_ascii_lowercase());
-
-        if matches!(ext.as_deref(), Some("cmd") | Some("bat")) {
-            let mut command = tokio_command("cmd");
-            let command_line = build_cmd_c_command(resolved_path, &command_args)?;
-            command.arg("/D");
-            command.arg("/S");
-            command.arg("/C");
-            command.raw_arg(command_line);
-            command
-        } else {
-            let mut command = tokio_command(resolved_path);
-            command.args(command_args);
-            command
-        }
+        let executable = resolve_windows_codex_executable(&bin, path_env.as_deref())?;
+        let mut command = tokio_command(executable);
+        command.args(command_args);
+        command
     };
 
     #[cfg(not(target_os = "windows"))]
@@ -694,6 +696,8 @@ pub(crate) fn build_codex_command_with_bin(
     if let Some(path_env) = path_env {
         command.env("PATH", path_env);
     }
+    // Timed-out probes and failed launches must not leave a child running.
+    command.kill_on_drop(true);
     Ok(command)
 }
 
@@ -739,11 +743,10 @@ pub(crate) async fn check_codex_installation(
     }
 
     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(if version.is_empty() {
-        None
-    } else {
-        Some(version)
-    })
+    if !version.starts_with("codex-cli ") {
+        return Err("The selected executable did not identify itself as Codex CLI.".into());
+    }
+    Ok(Some(version))
 }
 
 pub(crate) async fn spawn_workspace_session<E: EventSink>(
@@ -776,10 +779,12 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
     let stderr = child.stderr.take().ok_or("missing stderr")?;
 
     let session = Arc::new(WorkspaceSession {
+        session_id: uuid::Uuid::new_v4().to_string(),
         codex_args,
         child: Mutex::new(child),
         stdin: Mutex::new(stdin),
         pending: Mutex::new(HashMap::new()),
+        server_requests: Mutex::new(HashMap::new()),
         request_context: Mutex::new(HashMap::new()),
         thread_workspace: Mutex::new(HashMap::new()),
         hidden_thread_ids: Mutex::new(HashSet::new()),
@@ -802,7 +807,7 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
             if line.trim().is_empty() {
                 continue;
             }
-            let value: Value = match serde_json::from_str(&line) {
+            let mut value: Value = match serde_json::from_str(&line) {
                 Ok(value) => value,
                 Err(err) => {
                     let payload = AppServerEvent {
@@ -817,6 +822,9 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
                 }
             };
 
+            if let Some(message) = value.as_object_mut() {
+                message.insert("moonveilSessionId".into(), json!(session_clone.session_id));
+            }
             let maybe_id = value.get("id").and_then(|id| id.as_u64());
             let has_method = value.get("method").is_some();
             let has_result_or_error = value.get("result").is_some() || value.get("error").is_some();
@@ -903,12 +911,20 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
                         .and_then(Value::as_str)
                         .unwrap_or("hide");
                     if action.eq_ignore_ascii_case("hide") {
-                        session_clone.hidden_thread_ids.lock().await.insert(tid.clone());
+                        session_clone
+                            .hidden_thread_ids
+                            .lock()
+                            .await
+                            .insert(tid.clone());
                     }
                 } else if method_name == Some("thread/started")
                     && thread_started_is_memory_consolidation(&value)
                 {
-                    session_clone.hidden_thread_ids.lock().await.insert(tid.clone());
+                    session_clone
+                        .hidden_thread_ids
+                        .lock()
+                        .await
+                        .insert(tid.clone());
                     let payload = AppServerEvent {
                         workspace_id: routed_workspace_id.clone(),
                         message: json!({
@@ -928,12 +944,82 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
                     hidden.contains(tid)
                 };
                 if should_suppress_hidden_thread
+                    && value.get("id").is_none()
                     && should_suppress_hidden_thread_event(method_name, has_result_or_error)
                 {
                     continue;
                 }
             }
 
+            // Server requests are distinct from client requests, and IDs keep their JSON type.
+            if has_method && !has_result_or_error {
+                if let Some(id) = value.get("id").cloned() {
+                    if let Ok(key) = request_key(&id) {
+                        let mut pending = session_clone.server_requests.lock().await;
+                        if pending.contains_key(&key) {
+                            continue;
+                        }
+                        let token =
+                            format!("{}:{}", session_clone.session_id, uuid::Uuid::new_v4());
+                        pending.insert(
+                            key,
+                            PendingServerRequest {
+                                id: id.clone(),
+                                workspace_id: routed_workspace_id.clone(),
+                                token: token.clone(),
+                                method: method_name.unwrap_or_default().to_string(),
+                                params: value.get("params").cloned().unwrap_or(Value::Null),
+                            },
+                        );
+                        value
+                            .as_object_mut()
+                            .expect("server request object")
+                            .insert("moonveilRequestToken".into(), json!(token));
+                        // Requests always reach the user, including background-thread requests.
+                        drop(pending);
+                        event_sink_clone.emit_app_server_event(AppServerEvent {
+                            workspace_id: routed_workspace_id.clone(),
+                            message: value,
+                        });
+                        continue;
+                    }
+                }
+            }
+            if method_name == Some("serverRequest/resolved") {
+                if let Some(id) = value.pointer("/params/requestId") {
+                    if let Ok(key) = request_key(&id) {
+                        session_clone.server_requests.lock().await.remove(&key);
+                    }
+                }
+            }
+            if matches!(
+                method_name,
+                Some("turn/completed" | "thread/closed" | "thread/archived")
+            ) {
+                if let Some(ref tid) = thread_id {
+                    let turn_id = value
+                        .pointer("/params/turn/id")
+                        .or_else(|| value.pointer("/params/turnId"))
+                        .and_then(Value::as_str);
+                    session_clone
+                        .server_requests
+                        .lock()
+                        .await
+                        .retain(|_, request| {
+                            let same_thread = extract_thread_id(&json!({"params": request.params}))
+                                == Some(tid.clone());
+                            let legacy_turn = matches!(
+                                request.method.as_str(),
+                                "execCommandApproval" | "applyPatchApproval"
+                            );
+                            let same_turn = legacy_turn
+                                || (turn_id.is_some()
+                                    && request.params.get("turnId").and_then(Value::as_str)
+                                        == turn_id);
+                            !(same_thread && (method_name != Some("turn/completed") || same_turn))
+                        });
+                }
+            }
             if matches!(method_name, Some("item/started") | Some("item/completed")) {
                 let related_thread_ids = extract_related_thread_ids(&value);
                 if !related_thread_ids.is_empty() {
@@ -1046,6 +1132,13 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
             }
         }
 
+        session_clone.server_requests.lock().await.clear();
+        for workspace_id in session_clone.workspace_ids_snapshot().await {
+            event_sink_clone.emit_app_server_event(AppServerEvent {
+                workspace_id,
+                message: json!({"method": "codex/disconnected", "moonveilSessionId": session_clone.session_id, "params": {}}),
+            });
+        }
         // Ensure pending foreground requests cannot accumulate after process output ends.
         session_clone.pending.lock().await.clear();
         session_clone.request_context.lock().await.clear();
@@ -1087,8 +1180,19 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
             );
         }
     };
-    init_response?;
-    session.send_notification("initialized", None).await?;
+    let initialized = match init_response {
+        Ok(response) if response.get("error").is_some() => Err(format!(
+            "Codex app-server initialization failed: {}",
+            response["error"]
+        )),
+        Ok(_) => session.send_notification("initialized", None).await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = initialized {
+        let mut child = session.child.lock().await;
+        kill_child_process_tree(&mut child).await;
+        return Err(error);
+    }
 
     let payload = AppServerEvent {
         workspace_id: entry.id.clone(),
@@ -1105,13 +1209,13 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_initialize_params, extract_related_thread_ids, extract_thread_entries_from_thread_list_result,
-        extract_thread_id, normalize_root_path, resolve_workspace_for_cwd,
-        should_suppress_hidden_thread_event, source_subagent_kind,
+        build_initialize_params, extract_related_thread_ids,
+        extract_thread_entries_from_thread_list_result, extract_thread_id, normalize_root_path,
+        resolve_workspace_for_cwd, should_suppress_hidden_thread_event, source_subagent_kind,
         thread_started_is_memory_consolidation,
     };
-    use std::collections::HashMap;
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn extract_thread_id_reads_camel_case() {
@@ -1365,8 +1469,14 @@ mod tests {
 
     #[test]
     fn hidden_thread_suppression_allows_rpc_responses() {
-        assert!(!should_suppress_hidden_thread_event(Some("thread/archived"), true));
-        assert!(!should_suppress_hidden_thread_event(Some("thread/updated"), true));
+        assert!(!should_suppress_hidden_thread_event(
+            Some("thread/archived"),
+            true
+        ));
+        assert!(!should_suppress_hidden_thread_event(
+            Some("thread/updated"),
+            true
+        ));
         assert!(!should_suppress_hidden_thread_event(None, true));
     }
 

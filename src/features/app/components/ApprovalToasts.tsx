@@ -1,6 +1,5 @@
-import { useEffect, useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ApprovalRequest, WorkspaceInfo } from "../../../types";
-import { getApprovalCommandInfo } from "../../../utils/approvalRules";
 import {
   ToastActions,
   ToastBody,
@@ -11,10 +10,13 @@ import {
   ToastViewport,
 } from "../../design-system/components/toast/ToastPrimitives";
 
+import { approvalChoices, approvalNotice, approvalRequestKey } from "@utils/approvalProtocol";
+import type { ApprovalResponse } from "@utils/approvalProtocol";
+
 type ApprovalToastsProps = {
   approvals: ApprovalRequest[];
   workspaces: WorkspaceInfo[];
-  onDecision: (request: ApprovalRequest, decision: "accept" | "decline") => void;
+  onDecision: (request: ApprovalRequest, decision: ApprovalResponse) => void | Promise<void>;
   onRemember?: (request: ApprovalRequest, command: string[]) => void;
 };
 
@@ -22,41 +24,26 @@ export function ApprovalToasts({
   approvals,
   workspaces,
   onDecision,
-  onRemember,
+  onRemember: _onRemember,
 }: ApprovalToastsProps) {
   const workspaceLabels = useMemo(
     () => new Map(workspaces.map((workspace) => [workspace.id, workspace.name])),
     [workspaces],
   );
 
-  const primaryRequest = approvals[approvals.length - 1];
-
-  useEffect(() => {
-    if (!primaryRequest) {
-      return;
+  const submitted = useRef(new WeakSet<ApprovalRequest>());
+  const [busy, setBusy] = useState(new Set<ApprovalRequest>());
+  const [errors, setErrors] = useState(new Map<ApprovalRequest, string>());
+  const decide = async (request: ApprovalRequest, response: ApprovalResponse) => {
+    if (submitted.current.has(request)) return;
+    submitted.current.add(request);
+    setBusy((current) => new Set(current).add(request));
+    try {
+      await onDecision(request, response);
+    } catch (error) {
+      setErrors((current) => new Map(current).set(request, `Response could not be confirmed: ${String(error)}. Reconnect to refresh the request.`));
     }
-
-    const handler = (event: KeyboardEvent) => {
-      if (event.key !== "Enter") {
-        return;
-      }
-      const active = document.activeElement;
-      if (
-        active instanceof HTMLElement &&
-        (active.isContentEditable ||
-          active.tagName === "INPUT" ||
-          active.tagName === "TEXTAREA" ||
-          active.tagName === "SELECT")
-      ) {
-        return;
-      }
-      event.preventDefault();
-      onDecision(primaryRequest, "accept");
-    };
-
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onDecision, primaryRequest]);
+  };
 
   if (!approvals.length) {
     return null;
@@ -94,11 +81,12 @@ export function ApprovalToasts({
       {approvals.map((request) => {
         const workspaceName = workspaceLabels.get(request.workspace_id);
         const params = request.params ?? {};
-        const commandInfo = getApprovalCommandInfo(params);
         const entries = Object.entries(params);
+        const key = approvalRequestKey(request);
+        const notice = approvalNotice(request);
         return (
           <ToastCard
-            key={`${request.workspace_id}-${request.request_id}`}
+            key={key}
             className="approval-toast"
             role="alert"
           >
@@ -109,6 +97,7 @@ export function ApprovalToasts({
               ) : null}
             </ToastHeader>
             <div className="approval-toast-method">{methodLabel(request.method)}</div>
+            {notice ? <ToastBody>{notice}</ToastBody> : null}
             <div className="approval-toast-details">
               {entries.length ? (
                 entries.map(([key, value]) => {
@@ -137,28 +126,12 @@ export function ApprovalToasts({
               )}
             </div>
             <ToastActions className="approval-toast-actions">
-              <button
-                className="secondary"
-                onClick={() => onDecision(request, "decline")}
-              >
-                Decline
-              </button>
-              {commandInfo && onRemember ? (
-                <button
-                  className="ghost approval-toast-remember"
-                  onClick={() => onRemember(request, commandInfo.tokens)}
-                  title={`Allow commands that start with ${commandInfo.preview}`}
-                >
-                  Always allow
-                </button>
-              ) : null}
-              <button
-                className="primary"
-                onClick={() => onDecision(request, "accept")}
-              >
-                Approve (Enter)
-              </button>
+              {approvalChoices(request).map((choice) => (
+                <button key={choice.label} className="secondary" disabled={busy.has(request)}
+                  onClick={() => { void decide(request, choice.result); }}>{choice.label}</button>
+              ))}
             </ToastActions>
+            {errors.has(request) ? <ToastError>{errors.get(request)}</ToastError> : null}
           </ToastCard>
         );
       })}

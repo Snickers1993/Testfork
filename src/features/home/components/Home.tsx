@@ -1,11 +1,15 @@
+import type { MoonveilGuildProps } from "@/features/moonveil/types";
 import type {
   AccountSnapshot,
   LocalUsageSnapshot,
   RateLimitSnapshot,
+  ThreadSummary,
+  WorkspaceInfo,
 } from "../../../types";
 import { HomeActions } from "./HomeActions";
 import { HomeLatestAgentsSection } from "./HomeLatestAgentsSection";
 import { HomeUsageSection } from "./HomeUsageSection";
+import { GuildHall } from "../../moonveil/GuildHall";
 import type {
   LatestAgentRun,
   UsageMetric,
@@ -30,6 +34,11 @@ type HomeProps = {
   usageShowRemaining: boolean;
   accountInfo: AccountSnapshot | null;
   onSelectThread: (workspaceId: string, threadId: string) => void;
+  moonveilWorkspaces?: WorkspaceInfo[];
+  moonveilThreadsByWorkspace?: Record<string, ThreadSummary[]>;
+  moonveilActiveWorkspaceId?: string | null;
+  moonveilActiveThreadId?: string | null;
+  onCreateMoonveilThread?: MoonveilGuildProps["onCreateThread"];
 };
 
 export function Home({
@@ -50,38 +59,51 @@ export function Home({
   usageShowRemaining,
   accountInfo,
   onSelectThread,
+  moonveilWorkspaces = [],
+  moonveilThreadsByWorkspace = {},
+  moonveilActiveWorkspaceId = null,
+  moonveilActiveThreadId = null,
+  onCreateMoonveilThread = async () => null,
 }: HomeProps) {
   return (
-    <div className="home">
-      <div className="home-hero">
-        <div className="home-title">Codex Monitor</div>
-        <div className="home-subtitle">
-          Orchestrate agents across your local projects.
-        </div>
-      </div>
-      <HomeLatestAgentsSection
-        latestAgentRuns={latestAgentRuns}
-        isLoadingLatestAgents={isLoadingLatestAgents}
-        onSelectThread={onSelectThread}
-      />
-      <HomeActions
+    <div className="home moonveil-home">
+      <GuildHall
+        workspaces={moonveilWorkspaces}
+        threadsByWorkspace={moonveilThreadsByWorkspace}
+        activeWorkspaceId={moonveilActiveWorkspaceId}
+        activeThreadId={moonveilActiveThreadId}
         onAddWorkspace={onAddWorkspace}
-        onAddWorkspaceFromUrl={onAddWorkspaceFromUrl}
+        onCreateThread={onCreateMoonveilThread}
+        onOpenThread={onSelectThread}
       />
-      <HomeUsageSection
-        accountInfo={accountInfo}
-        accountRateLimits={accountRateLimits}
-        isLoadingLocalUsage={isLoadingLocalUsage}
-        localUsageError={localUsageError}
-        localUsageSnapshot={localUsageSnapshot}
-        onRefreshLocalUsage={onRefreshLocalUsage}
-        onUsageMetricChange={onUsageMetricChange}
-        onUsageWorkspaceChange={onUsageWorkspaceChange}
-        usageMetric={usageMetric}
-        usageShowRemaining={usageShowRemaining}
-        usageWorkspaceId={usageWorkspaceId}
-        usageWorkspaceOptions={usageWorkspaceOptions}
-      />
+      <details className="moonveil-codex-dashboard">
+        <summary>Codex dashboard & usage</summary>
+        <div className="moonveil-codex-dashboard-body">
+          <HomeLatestAgentsSection
+            latestAgentRuns={latestAgentRuns}
+            isLoadingLatestAgents={isLoadingLatestAgents}
+            onSelectThread={onSelectThread}
+          />
+          <HomeActions
+            onAddWorkspace={onAddWorkspace}
+            onAddWorkspaceFromUrl={onAddWorkspaceFromUrl}
+          />
+          <HomeUsageSection
+            accountInfo={accountInfo}
+            accountRateLimits={accountRateLimits}
+            isLoadingLocalUsage={isLoadingLocalUsage}
+            localUsageError={localUsageError}
+            localUsageSnapshot={localUsageSnapshot}
+            onRefreshLocalUsage={onRefreshLocalUsage}
+            onUsageMetricChange={onUsageMetricChange}
+            onUsageWorkspaceChange={onUsageWorkspaceChange}
+            usageMetric={usageMetric}
+            usageShowRemaining={usageShowRemaining}
+            usageWorkspaceId={usageWorkspaceId}
+            usageWorkspaceOptions={usageWorkspaceOptions}
+          />
+        </div>
+      </details>
     </div>
   );
 }

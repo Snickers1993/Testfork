@@ -117,39 +117,109 @@ pub(crate) fn resolve_windows_executable(program: &str, path_env: Option<&str>) 
     None
 }
 
+/// Resolve Codex to a native executable before crossing the process boundary.
+/// npm's wrapper is only a location hint: its contents are never evaluated.
 #[cfg(target_os = "windows")]
-fn validate_cmd_token(value: &str) -> Result<(), String> {
-    if value.contains('\0') {
-        return Err("Windows cmd wrapper does not support NUL bytes.".to_string());
+pub(crate) fn resolve_windows_codex_executable(
+    program: &str,
+    path_env: Option<&str>,
+) -> Result<PathBuf, String> {
+    let trimmed = program.trim();
+    let program = trimmed
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(trimmed);
+    if program.is_empty() || program.chars().any(|ch| ch.is_control() || ch == '"') {
+        return Err("Select a native Codex executable, not a shell command.".into());
     }
-    if value.contains('\n') || value.contains('\r') {
-        return Err("Windows cmd wrapper does not support newline characters.".to_string());
+    let requested = Path::new(program);
+    let has_path = program.contains(['\\', '/']) || program.contains(':');
+    if has_path && !requested.is_absolute() {
+        return Err("The Codex executable path must be absolute.".into());
     }
-    Ok(())
+    let extension = requested.extension().and_then(|value| value.to_str());
+    let is_wrapper = extension
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"));
+    if extension.is_some_and(|ext| !ext.eq_ignore_ascii_case("exe")) && !is_wrapper {
+        return Err("On Windows, select the native codex.exe executable.".into());
+    }
+    let is_codex = requested
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("codex"));
+    if is_wrapper && !is_codex {
+        return Err(
+            "Shell wrappers are not executed. Select the native codex.exe executable.".into(),
+        );
+    }
+    let roots = if has_path {
+        vec![requested
+            .parent()
+            .ok_or("Codex executable has no parent directory")?
+            .to_path_buf()]
+    } else {
+        path_env
+            .map(|value| env::split_paths(value).collect::<Vec<_>>())
+            .or_else(|| env::var_os("PATH").map(|value| env::split_paths(&value).collect()))
+            .unwrap_or_default()
+    };
+    for root in roots.into_iter().filter(|root| root.is_absolute()) {
+        let mut candidates = Vec::new();
+        if !is_wrapper {
+            candidates.push(if has_path {
+                requested.with_extension("exe")
+            } else {
+                root.join(requested).with_extension("exe")
+            });
+        }
+        if is_codex && (!has_path || is_wrapper) {
+            candidates.extend(windows_npm_codex_candidates(&root));
+        }
+        for candidate in candidates {
+            if candidate.is_file() {
+                return std::fs::canonicalize(&candidate)
+                    .map_err(|error| format!("Could not resolve Codex executable: {error}"));
+            }
+        }
+    }
+    Err("Native Codex CLI not found. Install Codex on PATH or select codex.exe in Settings. npm shell wrappers require the installed native @openai/codex Windows package.".into())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_npm_codex_candidates(root: &Path) -> Vec<PathBuf> {
+    let (package, target) = if cfg!(target_arch = "aarch64") {
+        ("codex-win32-arm64", "aarch64-pc-windows-msvc")
+    } else {
+        ("codex-win32-x64", "x86_64-pc-windows-msvc")
+    };
+    let package_root = root.join("node_modules/@openai/codex");
+    // Official npm installs may hoist their optional platform package, nest it
+    // below @openai/codex, or use the package's vendor fallback (codex-cli/bin/codex.js).
+    [
+        root.join("node_modules/@openai").join(package),
+        package_root.join("node_modules/@openai").join(package),
+        package_root,
+    ]
+    .into_iter()
+    .map(|base| base.join("vendor").join(target).join("bin/codex.exe"))
+    .collect()
 }
 
 #[cfg(target_os = "windows")]
 fn quote_cmd_token(value: &str) -> Result<String, String> {
-    validate_cmd_token(value)?;
-    let mut escaped = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '^' => escaped.push_str("^^"),
-            '"' => escaped.push_str("^\""),
-            '%' => escaped.push_str("^%"),
-            '!' => escaped.push_str("^!"),
-            _ => escaped.push(ch),
-        }
+    // cmd's batch reparsing cannot safely preserve arbitrary quote/expansion
+    // syntax. Keep editor-wrapper support only for plain literal tokens.
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || matches!(ch, '"' | '%' | '!' | '^' | '&' | '|' | '<' | '>'))
+    {
+        return Err("This Windows shell wrapper cannot accept command syntax in its path or arguments. Configure the native executable instead.".into());
     }
-    Ok(format!("\"{escaped}\""))
+    Ok(format!("\"{value}\""))
 }
 
-/// Builds a single `cmd.exe /C "<command>"` payload that safely treats each argument as data
-/// (protects cmd metacharacters like `&`, `|`, `>`, `<`) by always quoting tokens and escaping
-/// command-processor syntax in the token text (`^`, `"`, `%`, `!`).
-///
-/// Returns a string that already includes the required outer quotes, suitable to be passed as
-/// *one* argument after `/C` (usually with `/S`).
+/// Build a batch-wrapper command only from validated, literal tokens.
+/// Codex itself is always launched through its native executable instead.
 #[cfg(target_os = "windows")]
 pub(crate) fn build_cmd_c_command(program: &Path, args: &[String]) -> Result<String, String> {
     let program_str = program.to_string_lossy();
@@ -158,6 +228,99 @@ pub(crate) fn build_cmd_c_command(program: &Path, args: &[String]) -> Result<Str
     for arg in args {
         parts.push(quote_cmd_token(arg)?);
     }
-    let inner = parts.join(" ");
-    Ok(format!("\"{inner}\""))
+    Ok(format!("\"{}\"", parts.join(" ")))
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    fn fixture_root() -> PathBuf {
+        let root = env::temp_dir().join(format!("moonveil-executable-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn resolves_native_codex_and_quoted_manual_path() {
+        let root = fixture_root();
+        let bin = root.join("codex.exe");
+        std::fs::write(&bin, b"test fixture, never executed").unwrap();
+        let expected = std::fs::canonicalize(&bin).unwrap();
+        assert_eq!(
+            resolve_windows_codex_executable("codex", root.to_str()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            resolve_windows_codex_executable(&format!("\"{}\"", bin.display()), None).unwrap(),
+            expected
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolves_npm_native_package_without_executing_wrapper() {
+        let root = fixture_root();
+        let wrapper = root.join("codex.cmd");
+        std::fs::write(&wrapper, b"@echo malicious wrapper must never execute").unwrap();
+        for native in windows_npm_codex_candidates(&root) {
+            std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+            std::fs::write(&native, b"native fixture, never executed").unwrap();
+            let expected = std::fs::canonicalize(&native).unwrap();
+            assert_eq!(
+                resolve_windows_codex_executable(wrapper.to_str().unwrap(), None).unwrap(),
+                expected
+            );
+            assert_eq!(
+                resolve_windows_codex_executable("codex", root.to_str()).unwrap(),
+                expected
+            );
+            std::fs::remove_file(native).unwrap();
+        }
+        assert!(resolve_windows_codex_executable(wrapper.to_str().unwrap(), None).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_relative_paths_scripts_and_command_text() {
+        for value in [
+            ".\\codex.exe",
+            "codex.ps1",
+            "shell.bat",
+            "codex\n.exe",
+            "codex.exe\" & echo injected",
+        ] {
+            assert!(
+                resolve_windows_codex_executable(value, Some("")).is_err(),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wrapper_tokens_fail_closed_for_shell_syntax() {
+        for value in [
+            "a\" & echo injected",
+            "%PATH%",
+            "!NAME!",
+            "a^b",
+            "a&b",
+            "a|b",
+            "a>b",
+            "a<b",
+            "a\nb",
+            "a\rb",
+            "a\0b",
+        ] {
+            assert!(
+                build_cmd_c_command(Path::new(r"C:\tools\editor.cmd"), &[value.into()]).is_err(),
+                "{value:?}"
+            );
+        }
+        assert!(build_cmd_c_command(
+            Path::new(r"C:\tools\editor.cmd"),
+            &[r"C:\My Project\file.ts".into()]
+        )
+        .is_ok());
+    }
 }

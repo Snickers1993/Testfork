@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { CompletedTurnTracker } from "@utils/completedTurnTracker";
 import type {
   AppServerEvent,
   ApprovalRequest,
@@ -9,12 +10,12 @@ import {
   getAppServerParams,
   getAppServerRawMethod,
   getAppServerRequestId,
-  isApprovalRequestMethod,
   isSupportedAppServerMethod,
 } from "../../../utils/appServerEvents";
 import type { SupportedAppServerMethod } from "../../../utils/appServerEvents";
 
 type AgentDelta = {
+  isTurnComplete?: boolean;
   workspaceId: string;
   threadId: string;
   itemId: string;
@@ -76,20 +77,21 @@ type AppServerEventHandlers = {
   ) => void;
   onHookStarted?: (event: HookEvent) => void;
   onHookCompleted?: (event: HookEvent) => void;
-  onItemStarted?: (workspaceId: string, threadId: string, item: Record<string, unknown>) => void;
+  onItemStarted?: (workspaceId: string, threadId: string, item: Record<string, unknown>, isTurnComplete?: boolean) => void;
   onItemCompleted?: (workspaceId: string, threadId: string, item: Record<string, unknown>) => void;
   onReasoningSummaryDelta?: (workspaceId: string, threadId: string, itemId: string, delta: string) => void;
   onReasoningSummaryBoundary?: (workspaceId: string, threadId: string, itemId: string) => void;
   onReasoningTextDelta?: (workspaceId: string, threadId: string, itemId: string, delta: string) => void;
   onPlanDelta?: (workspaceId: string, threadId: string, itemId: string, delta: string) => void;
-  onCommandOutputDelta?: (workspaceId: string, threadId: string, itemId: string, delta: string) => void;
+  onCommandOutputDelta?: (workspaceId: string, threadId: string, itemId: string, delta: string, isTurnComplete?: boolean) => void;
   onTerminalInteraction?: (
     workspaceId: string,
     threadId: string,
     itemId: string,
     stdin: string,
+    isTurnComplete?: boolean,
   ) => void;
-  onFileChangeOutputDelta?: (workspaceId: string, threadId: string, itemId: string, delta: string) => void;
+  onFileChangeOutputDelta?: (workspaceId: string, threadId: string, itemId: string, delta: string, isTurnComplete?: boolean) => void;
   onTurnDiffUpdated?: (workspaceId: string, threadId: string, diff: string) => void;
   onThreadTokenUsageUpdated?: (
     workspaceId: string,
@@ -168,6 +170,7 @@ function parseHookEvent(
 export function useAppServerEvents(handlers: AppServerEventHandlers) {
   // Use ref to keep handlers current without triggering re-subscription
   const handlersRef = useRef(handlers);
+  const completedTurnsRef = useRef(new CompletedTurnTracker());
   
   // Update ref on every render to always have latest handlers
   useEffect(() => {
@@ -185,6 +188,8 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         return;
       }
       const params = getAppServerParams(payload);
+      const isTurnComplete = completedTurnsRef.current.observe(payload);
+      const lateTurnArgs: [boolean?] = isTurnComplete ? [true] : [];
 
       if (method === "codex/connected") {
         currentHandlers.onWorkspaceConnected?.(workspace_id);
@@ -193,11 +198,16 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
 
       const requestId = getAppServerRequestId(payload);
       const hasRequestId = requestId !== null;
+      const provenance = {
+        ...(typeof payload.message.moonveilRequestToken === "string" ? { request_token: payload.message.moonveilRequestToken } : {}),
+        ...(typeof payload.message.moonveilSessionId === "string" ? { session_id: payload.message.moonveilSessionId } : {}),
+      };
 
-      if (isApprovalRequestMethod(method) && hasRequestId) {
+      if (hasRequestId && method !== "item/tool/requestUserInput") {
         currentHandlers.onApprovalRequest?.({
           workspace_id,
           request_id: requestId as string | number,
+          ...provenance,
           method,
           params,
         });
@@ -212,10 +222,12 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         const questionsRaw = Array.isArray(params.questions) ? params.questions : [];
         const questions = questionsRaw
           .map((entry) => {
+            if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
             const question = entry as Record<string, unknown>;
             const optionsRaw = Array.isArray(question.options) ? question.options : [];
             const options = optionsRaw
               .map((option) => {
+                if (!option || typeof option !== "object" || Array.isArray(option)) return null;
                 const record = option as Record<string, unknown>;
                 const label = String(record.label ?? "").trim();
                 const description = String(record.description ?? "").trim();
@@ -226,17 +238,19 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
               })
               .filter((option): option is { label: string; description: string } => Boolean(option));
             return {
-              id: String(question.id ?? "").trim(),
+              id: typeof question.id === "string" ? question.id : "",
               header: String(question.header ?? ""),
               question: String(question.question ?? ""),
               isOther: Boolean(question.isOther ?? question.is_other),
+              isSecret: Boolean(question.isSecret),
               options: options.length ? options : undefined,
             };
           })
-          .filter((question) => question.id);
+          .filter((question): question is NonNullable<typeof question> => Boolean(question?.id));
         currentHandlers.onRequestUserInput?.({
           workspace_id,
           request_id: requestId as string | number,
+          ...provenance,
           params: {
             thread_id: String(params.threadId ?? params.thread_id ?? ""),
             turn_id: String(params.turnId ?? params.turn_id ?? ""),
@@ -257,12 +271,14 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
             threadId,
             itemId,
             delta,
+            ...(isTurnComplete ? { isTurnComplete: true } : {}),
           });
         }
         return;
       }
 
       if (method === "turn/started") {
+        if (isTurnComplete) return;
         const turn = params.turn as Record<string, unknown> | undefined;
         const threadId = String(
           params.threadId ?? params.thread_id ?? turn?.threadId ?? turn?.thread_id ?? "",
@@ -489,7 +505,7 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         const threadId = String(params.threadId ?? params.thread_id ?? "");
         const item = params.item as Record<string, unknown> | undefined;
         if (threadId && item) {
-          currentHandlers.onItemStarted?.(workspace_id, threadId, item);
+          currentHandlers.onItemStarted?.(workspace_id, threadId, item, ...lateTurnArgs);
         }
         return;
       }
@@ -538,7 +554,7 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         const itemId = String(params.itemId ?? params.item_id ?? "");
         const delta = String(params.delta ?? "");
         if (threadId && itemId && delta) {
-          currentHandlers.onCommandOutputDelta?.(workspace_id, threadId, itemId, delta);
+          currentHandlers.onCommandOutputDelta?.(workspace_id, threadId, itemId, delta, ...lateTurnArgs);
         }
         return;
       }
@@ -548,7 +564,7 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         const itemId = String(params.itemId ?? params.item_id ?? "");
         const stdin = String(params.stdin ?? "");
         if (threadId && itemId) {
-          currentHandlers.onTerminalInteraction?.(workspace_id, threadId, itemId, stdin);
+          currentHandlers.onTerminalInteraction?.(workspace_id, threadId, itemId, stdin, ...lateTurnArgs);
         }
         return;
       }
@@ -558,7 +574,7 @@ export function useAppServerEvents(handlers: AppServerEventHandlers) {
         const itemId = String(params.itemId ?? params.item_id ?? "");
         const delta = String(params.delta ?? "");
         if (threadId && itemId && delta) {
-          currentHandlers.onFileChangeOutputDelta?.(workspace_id, threadId, itemId, delta);
+          currentHandlers.onFileChangeOutputDelta?.(workspace_id, threadId, itemId, delta, ...lateTurnArgs);
         }
         return;
       }

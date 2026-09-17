@@ -321,3 +321,19 @@ describe("useThreadItemEvents", () => {
     });
   });
 });
+
+it("keeps late native output visible without reviving a completed or interrupted turn", () => {
+  const { result, dispatch, markProcessing } = makeOptions();
+  act(() => {
+    result.current.onCommandOutputDelta("ws-1", "thread-1", "shell", "MOONVEIL_STREAM_END", true);
+    result.current.onFileChangeOutputDelta("ws-1", "thread-1", "patch", "late patch", true);
+    result.current.onTerminalInteraction("ws-1", "thread-1", "shell", "late stdin", true);
+    result.current.onAgentMessageDelta({ workspaceId: "ws-1", threadId: "thread-1", itemId: "answer", delta: "late answer", isTurnComplete: true });
+    result.current.onItemStarted("ws-1", "thread-1", { id: "shell", type: "commandExecution" }, true);
+  });
+  expect(markProcessing).not.toHaveBeenCalled();
+  expect(dispatch).toHaveBeenCalledWith({ type: "appendToolOutput", threadId: "thread-1", itemId: "shell", delta: "MOONVEIL_STREAM_END" });
+  expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "appendAgentDelta", delta: "late answer" }));
+  act(() => result.current.onCommandOutputDelta("ws-1", "thread-1", "new-shell", "next turn"));
+  expect(markProcessing).toHaveBeenCalledWith("thread-1", true);
+});

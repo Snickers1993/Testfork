@@ -67,3 +67,13 @@ describe("useThreadUserInput", () => {
     });
   });
 });
+
+it("sends secret input to Codex but does not copy the secret into Moonveil conversation state", async () => {
+  const dispatch = vi.fn();
+  const { result } = renderHook(() => useThreadUserInput({ dispatch }));
+  await act(async () => result.current.handleUserInputSubmit({ workspace_id: "w", request_id: 0, params: {
+    thread_id: "t", turn_id: "turn", item_id: "item", questions: [{ id: "secret", header: "Secret", question: "Value", isSecret: true }],
+  } }, { answers: { secret: { answers: ["private-value"] } } }));
+  expect(JSON.stringify(dispatch.mock.calls)).not.toContain("private-value");
+  expect(JSON.stringify(dispatch.mock.calls)).toContain("[Provided to Codex]");
+});

@@ -96,7 +96,7 @@ export function SettingsFeaturesSection({
   return (
     <SettingsSection
       title="Features"
-      subtitle="Manage stable and experimental Codex features."
+      subtitle="Feature toggles update shared Codex config for all clients. Reconnect to apply changes."
     >
       <SettingsToggleRow
         title="Config file"
@@ -115,8 +115,8 @@ export function SettingsFeaturesSection({
         title="Personality"
         subtitle={
           <>
-            Choose Codex communication style (writes top-level <code>personality</code> in
-            config.toml).
+            Choose the communication style for new Moonveil conversations.
+            This preference stays in Moonveil and leaves shared Codex config unchanged.
           </>
         }
       >

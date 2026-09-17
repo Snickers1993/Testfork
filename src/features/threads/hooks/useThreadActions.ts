@@ -145,7 +145,7 @@ export function useThreadActions({
   );
 
   const startThreadForWorkspace = useCallback(
-    async (workspaceId: string, options?: { activate?: boolean }) => {
+    async (workspaceId: string, options?: { activate?: boolean; developerInstructions?: string }) => {
       const shouldActivate = options?.activate !== false;
       onDebug?.({
         id: `${Date.now()}-client-thread-start`,
@@ -155,7 +155,9 @@ export function useThreadActions({
         payload: { workspaceId },
       });
       try {
-        const response = await startThreadService(workspaceId);
+        const response = options?.developerInstructions === undefined
+          ? await startThreadService(workspaceId)
+          : await startThreadService(workspaceId, options.developerInstructions);
         onDebug?.({
           id: `${Date.now()}-server-thread-start`,
           timestamp: Date.now(),

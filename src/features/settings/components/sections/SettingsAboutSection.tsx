@@ -5,6 +5,7 @@ import {
   isMobileRuntime,
   type AppBuildType,
 } from "@services/tauri";
+import { APP_UPDATES_AVAILABLE } from "@/features/update/updateAvailability";
 import { useUpdater } from "@/features/update/hooks/useUpdater";
 import {
   SettingsSection,
@@ -68,12 +69,12 @@ export function SettingsAboutSection({
       try {
         const mobileRuntime = await isMobileRuntime();
         if (active) {
-          setUpdaterEnabled(!mobileRuntime);
+          setUpdaterEnabled(APP_UPDATES_AVAILABLE && !mobileRuntime);
         }
       } catch {
         if (active) {
           // In non-Tauri previews we still want local desktop-like behavior.
-          setUpdaterEnabled(true);
+          setUpdaterEnabled(APP_UPDATES_AVAILABLE);
         }
       }
     };
@@ -112,10 +113,13 @@ export function SettingsAboutSection({
         <div className="settings-label">App Updates</div>
         <SettingsToggleRow
           title="Automatically check for app updates"
-          subtitle="When enabled, CodexMonitor checks for new app versions on launch."
+          subtitle={APP_UPDATES_AVAILABLE
+            ? "When enabled, Moonveil checks for new app versions on launch."
+            : "App updates are unavailable in Moonveil Module 1; no release feed is configured."}
         >
           <SettingsToggleSwitch
-            pressed={appSettings.automaticAppUpdateChecksEnabled}
+            pressed={updaterEnabled && appSettings.automaticAppUpdateChecksEnabled}
+            disabled={!updaterEnabled}
             onClick={() => {
               onToggleAutomaticAppUpdateChecks?.();
             }}

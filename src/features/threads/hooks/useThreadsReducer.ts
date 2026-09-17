@@ -147,11 +147,13 @@ export type ThreadAction =
       workspaceId: string;
       cursor: string | null;
     }
+  | { type: "clearServerRequests"; workspaceId: string; sessionId?: string; threadId?: string; turnId?: string; requestId?: number | string }
   | { type: "addApproval"; approval: ApprovalRequest }
   | { type: "removeApproval"; requestId: number | string; workspaceId: string }
   | { type: "addUserInputRequest"; request: RequestUserInputRequest }
   | {
       type: "removeUserInputRequest";
+      sessionId?: string;
       requestId: number | string;
       workspaceId: string;
     }

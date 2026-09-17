@@ -308,6 +308,7 @@ describe("useAppServerEvents", () => {
             header: "Confirm",
             question: "Proceed?",
             isOther: false,
+            isSecret: false,
             options: [
               { label: "Yes", description: "Continue." },
               { label: "No", description: "Stop." },
@@ -458,6 +459,7 @@ describe("useAppServerEvents", () => {
             header: "",
             question: "Choose",
             isOther: false,
+            isSecret: false,
             options: [
               { label: "Yes", description: "" },
               { label: "", description: "No label" },
@@ -539,4 +541,30 @@ describe("useAppServerEvents", () => {
       root.unmount();
     });
   });
+});
+
+it("keeps legacy, permissions, MCP, dynamic, and unknown server requests visible with original IDs", async () => {
+  const onApprovalRequest = vi.fn();
+  const { root } = await mount({ onApprovalRequest });
+  for (const method of ["execCommandApproval", "applyPatchApproval", "item/permissions/requestApproval", "mcpServer/elicitation/request", "item/tool/call", "future/security/request"]) {
+    act(() => listener?.({ workspace_id: "w", message: { id: "0001", method, params: { reason: "test" } } }));
+    expect(onApprovalRequest).toHaveBeenLastCalledWith({ workspace_id: "w", request_id: "0001", method, params: { reason: "test" } });
+  }
+  await act(async () => root.unmount());
+});
+
+it("flags late native item output after turn interruption and preserves subsequent turns", async () => {
+  const onCommandOutputDelta = vi.fn();
+  const onTurnCompleted = vi.fn();
+  const { root } = await mount({ onCommandOutputDelta, onTurnCompleted });
+  const emit = (method: string, params: Record<string, unknown>) => listener?.({ workspace_id: "w", message: { method, params, moonveilSessionId: "s" } });
+  act(() => {
+    emit("turn/completed", { threadId: "t", turn: { id: "stopped", status: "interrupted" } });
+    emit("item/commandExecution/outputDelta", { threadId: "t", turnId: "stopped", itemId: "shell", delta: "MOONVEIL_STREAM_END" });
+  });
+  expect(onTurnCompleted).toHaveBeenCalledWith("w", "t", "stopped");
+  expect(onCommandOutputDelta).toHaveBeenLastCalledWith("w", "t", "shell", "MOONVEIL_STREAM_END", true);
+  act(() => emit("item/commandExecution/outputDelta", { threadId: "t", turnId: "next", itemId: "new-shell", delta: "new turn" }));
+  expect(onCommandOutputDelta).toHaveBeenLastCalledWith("w", "t", "new-shell", "new turn");
+  await act(async () => root.unmount());
 });

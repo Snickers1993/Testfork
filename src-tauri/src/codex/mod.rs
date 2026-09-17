@@ -74,6 +74,7 @@ pub(crate) async fn codex_update(
 #[tauri::command]
 pub(crate) async fn start_thread(
     workspace_id: String,
+    developer_instructions: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Value, String> {
@@ -82,12 +83,16 @@ pub(crate) async fn start_thread(
             &*state,
             app,
             "start_thread",
-            json!({ "workspaceId": workspace_id }),
+            json!({ "workspaceId": workspace_id, "developerInstructions": developer_instructions }),
         )
         .await;
     }
 
-    codex_core::start_thread_core(&state.sessions, &state.workspaces, workspace_id).await
+    let personality = state.app_settings.lock().await.personality.clone();
+    codex_core::start_thread_core(
+        &state.sessions, &state.workspaces, workspace_id, developer_instructions,
+        Some(personality),
+    ).await
 }
 
 #[tauri::command]

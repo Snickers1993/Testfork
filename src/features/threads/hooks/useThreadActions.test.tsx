@@ -140,6 +140,31 @@ describe("useThreadActions", () => {
     expect(loadedThreadsRef.current["thread-1"]).toBe(true);
   });
 
+  it("passes companion instructions only when starting its native thread", async () => {
+    const instructions = "You are Sylra. Keep implementation practical.";
+    vi.mocked(startThread).mockResolvedValue({ result: { thread: { id: "sylra-native" } } });
+    vi.mocked(resumeThread).mockResolvedValueOnce({ result: { thread: { id: "sylra-native", turns: [] } } });
+    const { result, dispatch } = renderActions();
+    await act(async () => {
+      await result.current.startThreadForWorkspace("ws-1", { activate: false, developerInstructions: instructions });
+    });
+    expect(startThread).toHaveBeenCalledWith("ws-1", instructions);
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "setActiveThreadId" }));
+    await act(async () => { await result.current.resumeThreadForWorkspace("ws-1", "sylra-native", true); });
+    expect(resumeThread).toHaveBeenCalledWith("ws-1", "sylra-native");
+    expect(startThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not invent a thread when companion creation fails", async () => {
+    vi.mocked(startThread).mockRejectedValue(new Error("Codex unavailable"));
+    const { result, dispatch, loadedThreadsRef } = renderActions();
+    await expect(result.current.startThreadForWorkspace("ws-1", {
+      developerInstructions: "You are Sylra.",
+    })).rejects.toThrow("Codex unavailable");
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(loadedThreadsRef.current).toEqual({});
+  });
+
   it("forks a thread and activates the fork", async () => {
     vi.mocked(forkThread).mockResolvedValue({
       result: { thread: { id: "thread-fork-1" } },

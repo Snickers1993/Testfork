@@ -1,11 +1,6 @@
 import { useCallback } from "react";
 import type { Dispatch, MutableRefObject } from "react";
 import type { ApprovalRequest } from "@/types";
-import {
-  getApprovalCommandInfo,
-  matchesCommandPrefix,
-} from "@utils/approvalRules";
-import { respondToServerRequest } from "@services/tauri";
 import type { ThreadAction } from "./useThreadsReducer";
 
 type UseThreadApprovalEventsOptions = {
@@ -15,23 +10,14 @@ type UseThreadApprovalEventsOptions = {
 
 export function useThreadApprovalEvents({
   dispatch,
-  approvalAllowlistRef,
+  approvalAllowlistRef: _approvalAllowlistRef,
 }: UseThreadApprovalEventsOptions) {
   return useCallback(
     (approval: ApprovalRequest) => {
-      const commandInfo = getApprovalCommandInfo(approval.params ?? {});
-      const allowlist =
-        approvalAllowlistRef.current[approval.workspace_id] ?? [];
-      if (commandInfo && matchesCommandPrefix(commandInfo.tokens, allowlist)) {
-        void respondToServerRequest(
-          approval.workspace_id,
-          approval.request_id,
-          "accept",
-        );
-        return;
-      }
+      // Moonveil never synthesizes or auto-accepts a Codex approval request.
+      // The native request remains pending until the user makes an explicit decision.
       dispatch({ type: "addApproval", approval });
     },
-    [approvalAllowlistRef, dispatch],
+    [dispatch],
   );
 }

@@ -256,10 +256,11 @@ export const useSettingsFeaturesSection = ({
             feature.name,
             nextEnabled,
           );
+          // Feature toggles deliberately edit the shared Codex config. Ordinary
+          // Moonveil settings saves must have no global-config side effects.
+          await setCodexFeatureFlag(feature.name, nextEnabled);
           if (nextSettings) {
             await onUpdateAppSettings(nextSettings);
-          } else {
-            await setCodexFeatureFlag(feature.name, nextEnabled);
           }
           setFeatures((current) =>
             current.map((item) =>

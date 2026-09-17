@@ -26,18 +26,6 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      # A source/dependency snapshot makes offline review possible. No .git,
-      # credentials, caches, user data, or Codex home are included.
-      - name: Package offline review snapshot
-        run: |
-          git archive HEAD > /tmp/moonveil-source.tar
-          tar -rf /tmp/moonveil-source.tar node_modules
-          gzip /tmp/moonveil-source.tar
-      - uses: actions/upload-artifact@v4
-        with:
-          name: moonveil-offline-review-${{ github.sha }}
-          path: /tmp/moonveil-source.tar.gz
-          retention-days: 3
       - name: TypeScript
         run: npm run typecheck
       - name: Lint

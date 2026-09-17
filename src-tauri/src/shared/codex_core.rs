@@ -14,7 +14,6 @@ use tokio::time::Instant;
 use crate::backend::app_server::WorkspaceSession;
 use crate::codex::config as codex_config;
 use crate::codex::home::{resolve_default_codex_home, resolve_workspace_codex_home};
-use crate::rules;
 use crate::shared::account::{build_account_response, read_auth_account};
 use crate::types::WorkspaceEntry;
 
@@ -248,17 +247,36 @@ async fn resolve_workspace_path_core(
     Ok(entry.path.clone())
 }
 
+fn thread_start_params(
+    workspace_path: String,
+    developer_instructions: Option<String>,
+    personality: Option<String>,
+) -> Value {
+    let mut params = json!({
+        "cwd": workspace_path,
+        "approvalPolicy": "on-request"
+    });
+    if let Some(instructions) = developer_instructions {
+        params["developerInstructions"] = Value::String(instructions);
+    }
+    if let Some(style) =
+        personality.filter(|value| matches!(value.as_str(), "friendly" | "pragmatic"))
+    {
+        params["personality"] = Value::String(style);
+    }
+    params
+}
+
 pub(crate) async fn start_thread_core(
     sessions: &Mutex<HashMap<String, Arc<WorkspaceSession>>>,
     workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
     workspace_id: String,
+    developer_instructions: Option<String>,
+    personality: Option<String>,
 ) -> Result<Value, String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
     let workspace_path = resolve_workspace_path_core(workspaces, &workspace_id).await?;
-    let params = json!({
-        "cwd": workspace_path,
-        "approvalPolicy": "on-request"
-    });
+    let params = thread_start_params(workspace_path, developer_instructions, personality);
     session
         .send_request_for_workspace(&workspace_id, "thread/start", params)
         .await
@@ -852,31 +870,17 @@ pub(crate) async fn respond_to_server_request_core(
     result: Value,
 ) -> Result<(), String> {
     let session = get_session_clone(sessions, &workspace_id).await?;
-    session.send_response(request_id, result).await
+    session
+        .send_response(&workspace_id, request_id, result)
+        .await
 }
 
 pub(crate) async fn remember_approval_rule_core(
-    workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
-    workspace_id: String,
-    command: Vec<String>,
+    _workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
+    _workspace_id: String,
+    _command: Vec<String>,
 ) -> Result<Value, String> {
-    let command = command
-        .into_iter()
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect::<Vec<_>>();
-    if command.is_empty() {
-        return Err("empty command".to_string());
-    }
-
-    let codex_home = resolve_codex_home_for_workspace_core(workspaces, &workspace_id).await?;
-    let rules_path = rules::default_rules_path(&codex_home);
-    rules::append_prefix_rule(&rules_path, &command)?;
-
-    Ok(json!({
-        "ok": true,
-        "rulesPath": rules_path,
-    }))
+    Err("Persistent approval rules are unavailable in Moonveil. Review each Codex request explicitly.".into())
 }
 
 pub(crate) async fn get_config_model_core(
@@ -892,6 +896,38 @@ pub(crate) async fn get_config_model_core(
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn companion_thread_start_uses_native_developer_instructions() {
+        let instructions = "You are Sylra.\nKeep implementation practical.";
+        let params = thread_start_params(
+            "C:/Projects/Moonveil".into(),
+            Some(instructions.into()),
+            None,
+        );
+        assert_eq!(params["developerInstructions"], instructions);
+        assert_eq!(params["cwd"], "C:/Projects/Moonveil");
+        assert_eq!(params["approvalPolicy"], "on-request");
+        assert!(params.get("baseInstructions").is_none());
+        assert!(params.get("config").is_none());
+    }
+
+    #[test]
+    fn ordinary_thread_start_does_not_override_developer_instructions() {
+        let params = thread_start_params("C:/Projects/Moonveil".into(), None, None);
+        assert!(params.get("developerInstructions").is_none());
+        assert!(params.get("personality").is_none());
+    }
+
+    #[test]
+    fn thread_start_applies_only_supported_communication_preferences() {
+        for style in ["friendly", "pragmatic"] {
+            let params = thread_start_params("C:/Project".into(), None, Some(style.into()));
+            assert_eq!(params["personality"], style);
+        }
+        let params = thread_start_params("C:/Project".into(), None, Some("unknown".into()));
+        assert!(params.get("personality").is_none());
+    }
 
     #[test]
     fn normalize_strips_file_uri_prefix() {

@@ -1,0 +1,85 @@
+# Moonveil architecture — Module 1
+
+## Product and runtime ownership
+
+Moonveil is **CodexMonitor++ with a magical guild**: a Tauri 2 desktop client using the existing React/TypeScript frontend, Rust host, shared backend cores, and optional remote daemon.
+
+```text
+Moonveil Guild Hall
+  companion identity + preferences + project/native-thread associations
+    → existing workspace connection and thread creation/navigation
+CodexMonitor conversation workspace
+  sidebar + messages + reasoning/tools + approvals + files/diffs
+  Git + worktrees + terminal + model/reasoning/account controls
+    → existing typed Tauri IPC or remote daemon adapter
+    → shared Rust Codex core and owned app-server process
+    → stock Codex authentication, native threads, turns, tools and sandbox
+```
+
+Codex owns authentication, model discovery, native history/context, execution, approvals, and sandbox enforcement. Moonveil owns presentation and companion metadata. A companion does not create a separate runtime or replace the normal project/thread workflow. Existing terminal, Git/GitHub, files, worktrees, notifications, remote/mobile, and dictation facilities remain available under their existing settings.
+
+`src/App.tsx` loads the application shell; `src/features/app/components/MainApp.tsx` composes the existing hooks. Cross-runtime behavior lives in `src-tauri/src/shared/*`, with app and daemon adapters. The Guild Hall does not add a generic shell or arbitrary app-server forwarding command.
+
+## Companion identity and instructions
+
+`src/features/moonveil/types.ts` defines stable companion ID, name, role, portrait, instructions, and preferred detail level. Five initial identities are supplied: Elaria, Sylra, Lyra, Rowan, and Noctis. Basic custom-companion creation remains available. The metadata model supports later editing without requiring an editor redesign in Module 1; preferred detail is currently stored metadata, not an additional runtime instruction override.
+
+Creating a companion conversation follows this path:
+
+1. `GuildHall` checks that the selected companion has instructions and that guild storage can be written.
+2. `MainApp` connects the selected existing workspace when necessary and calls `startThreadForWorkspace` with `activate: false` and the companion's exact `instructions` value as `developerInstructions`.
+3. The existing `start_thread` IPC command passes that optional string through the app or daemon adapter to `shared/codex_core.rs`. The core supplies it as the official `thread/start.developerInstructions` field alongside the normal workspace and approval parameters.
+4. Codex returns the real native thread ID. Guild Hall saves the companion/project/thread association before invoking the existing thread-selection navigation.
+
+The installed app-server schema supports `developerInstructions?: string | null`. Moonveil supplies it once when creating a companion conversation. Ordinary thread creation omits the field. Linking an existing conversation changes only Moonveil metadata; opening/resuming it sends its existing native thread ID. Neither operation reapplies companion instructions, creates a replacement thread, prepends synthetic user messages, or reconstructs context from a local transcript. Editing companion metadata does not retroactively change an existing native conversation.
+
+The app's separate communication-style preference is passed as the supported native `thread/start.personality` value for new conversations (`friendly` or `pragmatic`). It does not rewrite Codex's global personality setting or mutate an existing thread.
+
+## Guild persistence and navigation
+
+`moonveil.guild.v1` in the application webview's persistent local storage holds versioned companion metadata, selected companion/theme, companion/project associations, and companion/project/native-thread associations. Native transcripts and authentication credentials are not part of this model. Companion text is ordinary user-authored metadata, not a secret-storage facility.
+
+The parser validates known fields, discards malformed/orphaned associations and unknown fields, and restores a usable seed state from malformed data. Each companion can retain multiple projects and conversations. Opening a saved conversation uses the normal CodexMonitor selection/resume path; Codex remains the source of truth for history and context.
+
+Writes occur before navigation can unmount Guild Hall. A completed creation still saves its real ID if the user left the screen while it was pending, but does not redirect the user afterward. The completion reads the latest saved metadata before adding its association. Storage and native-creation failures are displayed. If a native thread was created but its association could not be saved, the error identifies that thread for recovery through the normal sidebar; creation is not automatically retried.
+
+## Server requests and approvals
+
+Protocol behavior is based on schemas generated by the installed `codex-cli 0.154.0-alpha.6.2`. The current official [app-server documentation](https://learn.chatgpt.com/docs/app-server) and published Codex source are references; they do not substitute for installed-schema verification.
+
+Frontend `src/utils/approvalProtocol.ts` presents the supported choices. Rust `shared/server_requests.rs` validates the result against the actual pending request before any response is written.
+
+| Native request | Module 1 behavior |
+| --- | --- |
+| `item/commandExecution/requestApproval` | Explicit one-time accept, decline, or cancel, limited to the server's `availableDecisions` when supplied. |
+| `item/fileChange/requestApproval` | Explicit one-time accept, decline, or cancel using the native file-change response. |
+| `execCommandApproval`, `applyPatchApproval` | Legacy response mapping: approved, structured denied/rejection, or abort. |
+| `item/permissions/requestApproval` | Grant displayed requested `network`/`fileSystem` values for this turn, or return an empty turn-scoped denial. The host rejects broader or session-scoped grants. |
+| `item/tool/requestUserInput` | Existing question/answer UI; native question IDs and string answer arrays are validated. |
+| `mcpServer/elicitation/request` | Visible request with decline/cancel only. Form, URL, and verification acceptance are not implemented. |
+| `item/tool/call` | Explicit unsupported-tool rejection only. Moonveil does not register or execute dynamic tools. |
+| Other server requests | Visible unsupported request; explicit rejection becomes JSON-RPC method-not-found. No guessed acceptance payload. |
+
+Numeric and string request IDs remain distinct. Requests are bound to the owning workspace and live app-server session. Each pending request has a host-generated nonce; the host validates and strips that internal token before writing the native response. Session-tagged lifecycle events cannot clear a newer session request. Background-thread requests also reach the UI. Duplicate pending events are deduplicated. Resolution, turn/thread lifecycle, workspace removal, and disconnection invalidate relevant pending requests.
+
+The host validates and consumes a pending request before writing its response. A second response fails closed. A failed write has an unknown outcome and cannot be replayed as another approval. This provides at-most-once response attempts, not a claim of exactly-once delivery. UI send failures remain visible.
+
+There is no global Enter-to-approve shortcut, command-prefix auto-accept, “Always allow,” session-wide execution grant, or persistent policy/network amendment control. Codex remains the authority for whether execution requires approval and for enforcing the resulting permissions.
+
+## Codex environment, settings, and authentication
+
+Local operation uses the normal effective Codex home: an explicitly inherited `CODEX_HOME`, otherwise the user's `.codex` directory. On Windows the default home follows `USERPROFILE` before a shell-specific `HOME`. Legacy per-project Codex-home overrides are not used to create separate Moonveil authentication/sandbox environments.
+
+Saving Moonveil settings writes Moonveil settings only. It no longer silently rewrites shared feature flags or personality in Codex `config.toml`. Existing shared Codex configuration/AGENTS editors and feature controls remain explicit operations, with UI disclosure that they affect shared Codex configuration. Native authentication continues through Codex's existing account flow; Moonveil adds no password, OAuth-token, or API-key store and does not copy authentication files.
+
+The inherited CodexMonitor updater feed is disabled for this fork. The shared updater hook refuses checks/downloads when the packaged endpoint list is empty, and About displays disabled update controls with the reason. The inherited Sentry DSN is removed; telemetry initializes only when a builder explicitly supplies `VITE_SENTRY_DSN`.
+
+## Windows process behavior
+
+Windows Codex discovery resolves an absolute native `.exe` from the configured path or PATH and checks its `codex-cli` version response. Paths with spaces are passed as executable/argument values, not command text. Relative executable paths, unsupported scripts, and embedded command syntax are rejected. A `codex.cmd`/`codex.bat` selection is only a location hint for the adjacent official npm native platform package; its contents are never executed. Supported npm layouts include hoisted/nested Windows platform packages and the official vendor fallback.
+
+The host launches the resolved native executable directly with argument arrays and hidden console windows. It retains the existing stdio app-server initialization and event pipeline. Failed/timed-out probes use child drop cleanup; initialization failures terminate the owned process tree. Normal desktop exit drains shared sessions and terminates each owned local app-server process tree once. The separate managed remote daemon follows its existing keep-running setting. These are implemented lifecycle paths, not proof of forced-crash cleanup under every Windows condition.
+
+The event router tracks completed native turns by session, workspace, thread, and turn (with item associations for legacy deltas). Late output remains visible but cannot reactivate a completed or interrupted turn. This is UI lifecycle handling; it does not add a Moonveil tool executor or promise to kill a native tool process.
+
+Native Windows/Tauri and live Codex acceptance results, including approval, interruption, and restart continuity, are recorded separately in [WINDOWS_VALIDATION.md](WINDOWS_VALIDATION.md). Compilation and mock tests do not establish those results.

@@ -56,14 +56,15 @@ export function useThreadItemEvents({
       threadId: string,
       item: Record<string, unknown>,
       shouldMarkProcessing: boolean,
+      isTurnComplete = false,
     ) => {
       dispatch({ type: "ensureThread", workspaceId, threadId });
-      if (shouldMarkProcessing) {
+      if (shouldMarkProcessing && !isTurnComplete) {
         markProcessing(threadId, true);
       }
       applyCollabThreadLinks(workspaceId, threadId, item);
       const itemType = String(item?.type ?? "");
-      if (itemType === "enteredReviewMode") {
+      if (itemType === "enteredReviewMode" && !isTurnComplete) {
         markReviewing(threadId, true);
       } else if (itemType === "exitedReviewMode") {
         markReviewing(threadId, false);
@@ -106,8 +107,8 @@ export function useThreadItemEvents({
   );
 
   const handleToolOutputDelta = useCallback(
-    (threadId: string, itemId: string, delta: string) => {
-      markProcessing(threadId, true);
+    (threadId: string, itemId: string, delta: string, isTurnComplete = false) => {
+      if (!isTurnComplete) markProcessing(threadId, true);
       dispatch({ type: "appendToolOutput", threadId, itemId, delta });
       safeMessageActivity();
     },
@@ -115,13 +116,13 @@ export function useThreadItemEvents({
   );
 
   const handleTerminalInteraction = useCallback(
-    (threadId: string, itemId: string, stdin: string) => {
+    (threadId: string, itemId: string, stdin: string, isTurnComplete = false) => {
       if (!stdin) {
         return;
       }
       const normalized = stdin.replace(/\r\n/g, "\n");
       const suffix = normalized.endsWith("\n") ? "" : "\n";
-      handleToolOutputDelta(threadId, itemId, `\n[stdin]\n${normalized}${suffix}`);
+      handleToolOutputDelta(threadId, itemId, `\n[stdin]\n${normalized}${suffix}`, isTurnComplete);
     },
     [handleToolOutputDelta],
   );
@@ -132,14 +133,16 @@ export function useThreadItemEvents({
       threadId,
       itemId,
       delta,
+      isTurnComplete = false,
     }: {
       workspaceId: string;
       threadId: string;
       itemId: string;
       delta: string;
+      isTurnComplete?: boolean;
     }) => {
       dispatch({ type: "ensureThread", workspaceId, threadId });
-      markProcessing(threadId, true);
+      if (!isTurnComplete) markProcessing(threadId, true);
       const hasCustomName = Boolean(getCustomName(workspaceId, threadId));
       dispatch({
         type: "appendAgentDelta",
@@ -204,8 +207,8 @@ export function useThreadItemEvents({
   );
 
   const onItemStarted = useCallback(
-    (workspaceId: string, threadId: string, item: Record<string, unknown>) => {
-      handleItemUpdate(workspaceId, threadId, item, true);
+    (workspaceId: string, threadId: string, item: Record<string, unknown>, isTurnComplete = false) => {
+      handleItemUpdate(workspaceId, threadId, item, true, isTurnComplete);
     },
     [handleItemUpdate],
   );
@@ -246,22 +249,22 @@ export function useThreadItemEvents({
   );
 
   const onCommandOutputDelta = useCallback(
-    (_workspaceId: string, threadId: string, itemId: string, delta: string) => {
-      handleToolOutputDelta(threadId, itemId, delta);
+    (_workspaceId: string, threadId: string, itemId: string, delta: string, isTurnComplete = false) => {
+      handleToolOutputDelta(threadId, itemId, delta, isTurnComplete);
     },
     [handleToolOutputDelta],
   );
 
   const onTerminalInteraction = useCallback(
-    (_workspaceId: string, threadId: string, itemId: string, stdin: string) => {
-      handleTerminalInteraction(threadId, itemId, stdin);
+    (_workspaceId: string, threadId: string, itemId: string, stdin: string, isTurnComplete = false) => {
+      handleTerminalInteraction(threadId, itemId, stdin, isTurnComplete);
     },
     [handleTerminalInteraction],
   );
 
   const onFileChangeOutputDelta = useCallback(
-    (_workspaceId: string, threadId: string, itemId: string, delta: string) => {
-      handleToolOutputDelta(threadId, itemId, delta);
+    (_workspaceId: string, threadId: string, itemId: string, delta: string, isTurnComplete = false) => {
+      handleToolOutputDelta(threadId, itemId, delta, isTurnComplete);
     },
     [handleToolOutputDelta],
   );

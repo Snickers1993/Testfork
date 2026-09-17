@@ -168,10 +168,12 @@ mod tests {
         let stdin = child.stdin.take().expect("dummy child stdin");
 
         Arc::new(WorkspaceSession {
+            session_id: uuid::Uuid::new_v4().to_string(),
             codex_args: None,
             child: Mutex::new(child),
             stdin: Mutex::new(stdin),
             pending: Mutex::new(HashMap::new()),
+            server_requests: Mutex::new(HashMap::new()),
             request_context: Mutex::new(HashMap::new()),
             thread_workspace: Mutex::new(HashMap::new()),
             hidden_thread_ids: Mutex::new(HashSet::new()),

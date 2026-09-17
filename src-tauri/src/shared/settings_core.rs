@@ -30,13 +30,9 @@ pub(crate) async fn get_app_settings_core(app_settings: &Mutex<AppSettings>) -> 
     if let Ok(Some(apps_enabled)) = codex_config::read_apps_enabled() {
         settings.experimental_apps_enabled = apps_enabled;
     }
-    if let Ok(personality) = codex_config::read_personality() {
-        settings.personality = personality
-            .as_deref()
-            .and_then(normalize_personality)
-            .unwrap_or("friendly")
-            .to_string();
-    }
+    settings.personality = normalize_personality(&settings.personality)
+        .unwrap_or("friendly")
+        .to_string();
     settings
 }
 
@@ -48,11 +44,12 @@ pub(crate) async fn update_app_settings_core(
     settings.global_worktrees_folder = settings
         .global_worktrees_folder
         .map(|path| normalize_windows_namespace_path(&path));
-    let _ = codex_config::write_collaboration_modes_enabled(settings.collaboration_modes_enabled);
-    let _ = codex_config::write_steer_enabled(settings.steer_enabled);
-    let _ = codex_config::write_unified_exec_enabled(settings.unified_exec_enabled);
-    let _ = codex_config::write_apps_enabled(settings.experimental_apps_enabled);
-    let _ = codex_config::write_personality(settings.personality.as_str());
+    // Appearance, companion, and other Moonveil preferences must never rewrite
+    // shared Codex configuration. Explicit feature/config editor commands own
+    // shared configuration writes; personality is applied at thread/start.
+    settings.personality = normalize_personality(&settings.personality)
+        .unwrap_or("friendly")
+        .to_string();
     write_settings(settings_path, &settings)?;
     let mut current = app_settings.lock().await;
     *current = settings.clone();
@@ -67,4 +64,59 @@ pub(crate) fn get_codex_config_path_core() -> Result<String, String> {
                 .map(|value| value.to_string())
                 .ok_or_else(|| "Unable to resolve CODEX_HOME".to_string())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Run the real save path in a child with an isolated Codex home. This avoids
+    // mutating process-wide environment while other Rust tests run in parallel.
+    #[test]
+    fn settings_save_preserves_shared_codex_configuration() {
+        const CHILD_HOME: &str = "MOONVEIL_SETTINGS_TEST_HOME";
+        if let Some(root) = std::env::var_os(CHILD_HOME) {
+            let root = PathBuf::from(root);
+            let config_path = root.join("config.toml");
+            let before = std::fs::read(&config_path).unwrap();
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let state = Mutex::new(AppSettings::default());
+                let mut changed = AppSettings::default();
+                changed.theme = "dark".into();
+                changed.personality = "pragmatic".into();
+                changed.unified_exec_enabled = false;
+                let result =
+                    update_app_settings_core(changed, &state, &root.join("moonveil/settings.json"))
+                        .await
+                        .unwrap();
+                assert_eq!(result.personality, "pragmatic");
+                assert_eq!(get_app_settings_core(&state).await.personality, "pragmatic");
+            });
+            assert_eq!(std::fs::read(config_path).unwrap(), before);
+            assert!(!root.join("AGENTS.md").exists());
+            assert!(!root.join("auth.json").exists());
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("moonveil-settings-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("moonveil")).unwrap();
+        std::fs::write(root.join("config.toml"), "# shared client settings\npersonality = \"friendly\"\n[features]\nunified_exec = true\n").unwrap();
+        let output = crate::shared::process_core::std_command(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "shared::settings_core::tests::settings_save_preserves_shared_codex_configuration",
+                "--nocapture",
+            ])
+            .env(CHILD_HOME, &root)
+            .env("CODEX_HOME", &root)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            output.status.success(),
+            "settings child failed: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
 }

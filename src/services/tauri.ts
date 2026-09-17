@@ -387,8 +387,11 @@ export async function setWorkspaceRuntimeCodexArgs(
   });
 }
 
-export async function startThread(workspaceId: string) {
-  return invoke<any>("start_thread", { workspaceId });
+export async function startThread(workspaceId: string, developerInstructions?: string) {
+  return invoke<any>("start_thread", {
+    workspaceId,
+    ...(developerInstructions === undefined ? {} : { developerInstructions }),
+  });
 }
 
 export async function forkThread(workspaceId: string, threadId: string) {
@@ -527,12 +530,13 @@ export async function startReview(
 export async function respondToServerRequest(
   workspaceId: string,
   requestId: number | string,
-  decision: "accept" | "decline",
+  decision: "accept" | "decline" | Record<string, unknown>,
+  requestToken?: string,
 ) {
   return invoke("respond_to_server_request", {
     workspaceId,
     requestId,
-    result: { decision },
+    result: { ...(typeof decision === "string" ? { decision } : decision), ...(requestToken ? { _moonveilRequestToken: requestToken } : {}) },
   });
 }
 
@@ -540,11 +544,12 @@ export async function respondToUserInputRequest(
   workspaceId: string,
   requestId: number | string,
   answers: Record<string, { answers: string[] }>,
+  requestToken?: string,
 ) {
   return invoke("respond_to_server_request", {
     workspaceId,
     requestId,
-    result: { answers },
+    result: { answers, ...(requestToken ? { _moonveilRequestToken: requestToken } : {}) },
   });
 }
 

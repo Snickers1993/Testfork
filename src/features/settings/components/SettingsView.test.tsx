@@ -17,6 +17,7 @@ import {
   getAgentsSettings,
   getConfigModel,
   getExperimentalFeatureList,
+  setCodexFeatureFlag,
   isMobileRuntime,
   getModelList,
   listWorkspaces,
@@ -40,6 +41,7 @@ vi.mock("@services/tauri", async () => {
     getModelList: vi.fn(),
     getConfigModel: vi.fn(),
     getExperimentalFeatureList: vi.fn(),
+    setCodexFeatureFlag: vi.fn().mockResolvedValue(undefined),
     getAgentsSettings: vi.fn(),
     isMobileRuntime: vi.fn(),
     listWorkspaces: vi.fn(),
@@ -752,12 +754,13 @@ describe("SettingsView Display", () => {
 });
 
 describe("SettingsView About", () => {
-  it("toggles automatic app update checks", async () => {
+  it("disables update controls when the Moonveil build has no release feed", async () => {
     const onToggleAutomaticAppUpdateChecks = vi.fn();
     renderAboutSection({
       onToggleAutomaticAppUpdateChecks,
       appSettings: { automaticAppUpdateChecksEnabled: false },
     });
+    await act(async () => { await Promise.resolve(); });
 
     const row = screen
       .getByText("Automatically check for app updates")
@@ -765,11 +768,12 @@ describe("SettingsView About", () => {
     if (!row) {
       throw new Error("Expected automatic app update checks row");
     }
-    fireEvent.click(within(row).getByRole("button"));
-
-    await waitFor(() => {
-      expect(onToggleAutomaticAppUpdateChecks).toHaveBeenCalledTimes(1);
-    });
+    const toggle = within(row).getByRole("button") as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    fireEvent.click(toggle);
+    expect(onToggleAutomaticAppUpdateChecks).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Check for updates" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/no release feed is configured/)).toBeTruthy();
   });
 });
 
@@ -1767,6 +1771,7 @@ describe("SettingsView Features", () => {
       expect(onUpdateAppSettings).toHaveBeenCalledWith(
         expect.objectContaining({ unifiedExecEnabled: false }),
       );
+      expect(setCodexFeatureFlag).toHaveBeenCalledWith("unified_exec", false);
     });
   });
 

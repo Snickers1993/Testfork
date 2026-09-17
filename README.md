@@ -1,3 +1,17 @@
+# Moonveil v0.3 — Module 1
+
+> **CodexMonitor++ with a magical guild.** Moonveil is a fantasy-themed personal Codex desktop client built directly on CodexMonitor. Codex remains responsible for authentication, native threads/turns, tools, permissions, approvals, and sandboxing; Moonveil adds the Guild Hall and persistent companion identity/product layer.
+
+Module 1 adds Elaria, Sylra, Lyra, Rowan, Noctis, companion/project/native-thread associations, Moonvale Guild Hall artwork, Moonveil branding, and a direct Guild Hall → project → native Codex conversation path while preserving the mature CodexMonitor workflow.
+
+See [`docs/WINDOWS_VALIDATION.md`](docs/WINDOWS_VALIDATION.md) for the quickest setup, [`docs/MOONVEIL_ARCHITECTURE.md`](docs/MOONVEIL_ARCHITECTURE.md) for the implemented boundary, and [`docs/SOURCE_PROVENANCE.md`](docs/SOURCE_PROVENANCE.md) for licensing/provenance.
+
+Moonveil is based on [Dimillian/CodexMonitor](https://github.com/Dimillian/CodexMonitor), retained under its MIT license. The upstream documentation is preserved below because its project/thread, Git, terminal, files, and Codex integration remain the application foundation.
+
+---
+
+## Upstream CodexMonitor documentation
+
 # CodexMonitor
 
 [![gitcgr](https://gitcgr.com/badge/Dimillian/CodexMonitor.svg)](https://gitcgr.com/Dimillian/CodexMonitor)
@@ -11,7 +25,7 @@ CodexMonitor is a Tauri app for orchestrating multiple Codex agents across local
 ### Workspaces & Threads
 
 - Add and persist workspaces, group/sort them, and jump into recent agent activity from the home dashboard.
-- Spawn one `codex app-server` per workspace, resume threads, and track unread/running state.
+- Share a local `codex app-server` session across workspaces with matching runtime settings, resume threads, and track unread/running state.
 - Worktree and clone agents for isolated work; worktrees live under the app data directory (legacy `.codex-worktrees` supported).
 - Thread management: pin/rename/archive/copy, per-thread drafts, and stop/interrupt in-flight turns.
 - Optional remote backend (daemon) mode for running Codex on another machine.
@@ -44,7 +58,7 @@ CodexMonitor is a Tauri app for orchestrating multiple Codex agents across local
 - Responsive layouts (desktop/tablet/phone) with tabbed navigation.
 - Sidebar usage and credits meter for account rate limits plus a home usage snapshot.
 - Terminal dock with multiple tabs for background commands (experimental).
-- In-app updates with toast-driven download/install, debug panel copy/clear, sound notifications, plus platform-specific window effects (macOS overlay title bar + vibrancy) and a reduced transparency toggle.
+- Debug panel copy/clear, sound notifications, platform-specific window effects (macOS overlay title bar + vibrancy), and a reduced transparency toggle. Upstream update endpoints and automatic updater checks are disabled for Moonveil.
 
 ## Requirements
 
@@ -291,7 +305,7 @@ src-tauri/
 
 - Workspaces persist to `workspaces.json` under the app data directory.
 - App settings persist to `settings.json` under the app data directory (theme, backend mode/provider, remote endpoints/tokens, Codex path, default access mode, UI scale, follow-up message behavior).
-- Feature settings are supported in the UI and synced to `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) on load/save. Stable: Collaboration modes (`features.collaboration_modes`), personality (`personality`), and Background terminal (`features.unified_exec`). Experimental: Apps (`features.apps`). Steering capability still follows Codex `features.steer`, but follow-up default behavior is controlled in Settings → Composer.
+- Ordinary settings saves update Moonveil settings only. Explicit shared feature controls and config/AGENTS editors disclose their changes to normal Codex configuration. Communication style is sent as thread/start personality; companion instructions use developerInstructions. Steering capability still follows Codex `features.steer`, while follow-up behavior is controlled in Settings → Composer.
 - On launch and on window focus, the app reconnects and refreshes thread lists for each workspace.
 - Threads are restored by filtering `thread/list` results using the workspace `cwd`.
 - Selecting a thread always calls `thread/resume` to refresh messages from disk.
@@ -299,7 +313,7 @@ src-tauri/
 - The app uses `codex app-server` over stdio; see `src-tauri/src/lib.rs` and `src-tauri/src/codex/`.
 - The remote daemon entrypoint is `src-tauri/src/bin/codex_monitor_daemon.rs`; RPC routing lives in `src-tauri/src/bin/codex_monitor_daemon/rpc.rs` and domain handlers in `src-tauri/src/bin/codex_monitor_daemon/rpc/`.
 - Shared domain logic lives in `src-tauri/src/shared/` (notably `src-tauri/src/shared/git_ui_core/` and `src-tauri/src/shared/workspaces_core/`).
-- Codex home resolves from workspace settings (if set), then legacy `.codexmonitor/`, then `$CODEX_HOME`/`~/.codex`.
+- Codex uses the normal inherited `CODEX_HOME`, or the user .codex directory (USERPROFILE on Windows). Legacy per-workspace Codex-home overrides are ignored; Moonveil does not provision a separate home.
 - Worktree agents live under the app data directory (`worktrees/<workspace-id>`); legacy `.codex-worktrees/` paths remain supported, and the app no longer edits repo `.gitignore` files.
 - UI state (panel sizes, reduced transparency toggle, recent thread activity) is stored in `localStorage`.
 - Custom prompts load from `$CODEX_HOME/prompts` (or `~/.codex/prompts`) with optional frontmatter description/argument hints.

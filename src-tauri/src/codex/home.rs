@@ -3,6 +3,9 @@ use std::path::PathBuf;
 
 use crate::types::WorkspaceEntry;
 
+#[cfg(test)]
+pub(crate) static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub(crate) fn resolve_workspace_codex_home(
     _entry: &WorkspaceEntry,
     _parent_entry: Option<&WorkspaceEntry>,
@@ -138,6 +141,14 @@ fn join_env_path(prefix: &str, remainder: &str) -> PathBuf {
 }
 
 pub(crate) fn resolve_home_dir() -> Option<PathBuf> {
+    // Match the official Windows home convention. A Git Bash HOME override
+    // must not silently select a different authentication/sandbox directory.
+    #[cfg(windows)]
+    if let Ok(value) = env::var("USERPROFILE") {
+        if !value.trim().is_empty() {
+            return Some(PathBuf::from(value));
+        }
+    }
     if let Ok(value) = env::var("HOME") {
         if !value.trim().is_empty() {
             return Some(PathBuf::from(value));
@@ -173,9 +184,6 @@ pub(crate) fn resolve_home_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use crate::types::{WorkspaceKind, WorkspaceSettings, WorktreeInfo};
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn workspace_entry(kind: WorkspaceKind, path: &str) -> WorkspaceEntry {
         let worktree = if kind.is_worktree() {
@@ -199,7 +207,7 @@ mod tests {
     #[test]
     fn workspace_codex_home_uses_default_resolution() {
         let entry = workspace_entry(WorkspaceKind::Main, "/repo");
-        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _guard = HOME_ENV_LOCK.lock().expect("lock env");
 
         let prev_codex_home = std::env::var("CODEX_HOME").ok();
         std::env::set_var("CODEX_HOME", "/tmp/codex-global");
@@ -215,12 +223,14 @@ mod tests {
 
     #[test]
     fn codex_home_expands_tilde_and_env_vars() {
-        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _guard = HOME_ENV_LOCK.lock().expect("lock env");
         let home_dir = std::env::temp_dir().join("codex-home-test");
         let home_str = home_dir.to_string_lossy().to_string();
 
         let prev_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", &home_str);
+        let prev_userprofile = std::env::var("USERPROFILE").ok();
+        std::env::set_var("USERPROFILE", &home_str);
 
         let prev_appdata = std::env::var("APPDATA").ok();
         std::env::set_var("APPDATA", "/tmp/appdata-root");
@@ -246,6 +256,10 @@ mod tests {
         match prev_home {
             Some(value) => std::env::set_var("HOME", value),
             None => std::env::remove_var("HOME"),
+        }
+        match prev_userprofile {
+            Some(value) => std::env::set_var("USERPROFILE", value),
+            None => std::env::remove_var("USERPROFILE"),
         }
 
         match prev_appdata {

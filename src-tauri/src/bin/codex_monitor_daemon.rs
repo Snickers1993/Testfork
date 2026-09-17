@@ -680,8 +680,16 @@ impl DaemonState {
         files_core::file_write_core(&self.workspaces, scope, kind, workspace_id, content).await
     }
 
-    async fn start_thread(&self, workspace_id: String) -> Result<Value, String> {
-        codex_core::start_thread_core(&self.sessions, &self.workspaces, workspace_id).await
+    async fn start_thread(
+        &self,
+        workspace_id: String,
+        developer_instructions: Option<String>,
+    ) -> Result<Value, String> {
+        let personality = self.app_settings.lock().await.personality.clone();
+        codex_core::start_thread_core(
+            &self.sessions, &self.workspaces, workspace_id, developer_instructions,
+            Some(personality),
+        ).await
     }
 
     async fn resume_thread(
@@ -1669,10 +1677,12 @@ mod tests {
         let stdin = child.stdin.take().expect("dummy child stdin");
 
         Arc::new(WorkspaceSession {
+            session_id: uuid::Uuid::new_v4().to_string(),
             codex_args: None,
             child: Mutex::new(child),
             stdin: Mutex::new(stdin),
             pending: Mutex::new(HashMap::new()),
+            server_requests: Mutex::new(HashMap::new()),
             request_context: Mutex::new(HashMap::new()),
             thread_workspace: Mutex::new(HashMap::new()),
             hidden_thread_ids: Mutex::new(HashSet::new()),
