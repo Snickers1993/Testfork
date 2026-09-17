@@ -1,4 +1,5 @@
 import { useCallback, useRef } from "react";
+import { requireNativeStopConfirmation } from "@utils/turnStop";
 import type { Dispatch, MutableRefObject } from "react";
 import type { RateLimitSnapshot, TurnPlan } from "@/types";
 import { interruptTurn as interruptTurnService } from "@services/tauri";
@@ -56,6 +57,7 @@ export function useThreadTurnEvents({
   safeMessageActivity,
   recordThreadActivity,
 }: UseThreadTurnEventsOptions) {
+  const queuedStopsInFlightRef = useRef(new Set<string>());
   const immediateActiveTurnIdByThreadRef = useRef<Record<string, string | null>>({});
   const lastReducerActiveTurnIdByThreadRef = useRef<Record<string, string | null>>({});
   const hasOptimisticActiveTurnByThreadRef = useRef<Record<string, boolean>>({});
@@ -235,20 +237,29 @@ export function useThreadTurnEvents({
         workspaceId,
         threadId,
       });
-      if (pendingInterruptsRef.current.has(threadId)) {
-        pendingInterruptsRef.current.delete(threadId);
-        if (turnId) {
-          void interruptTurnService(workspaceId, threadId, turnId).catch(() => {});
-        }
-        return;
-      }
       markProcessing(threadId, true);
       if (turnId) {
-        lastReducerActiveTurnIdByThreadRef.current[threadId] =
-          getActiveTurnId(threadId);
+        lastReducerActiveTurnIdByThreadRef.current[threadId] = getActiveTurnId(threadId);
         hasOptimisticActiveTurnByThreadRef.current[threadId] = true;
         immediateActiveTurnIdByThreadRef.current[threadId] = turnId;
         setActiveTurnId(threadId, turnId);
+      }
+      if (turnId && pendingInterruptsRef.current.has(threadId)
+          && !queuedStopsInFlightRef.current.has(threadId)) {
+        queuedStopsInFlightRef.current.add(threadId);
+        void interruptTurnService(workspaceId, threadId, turnId)
+          .then((response) => {
+            requireNativeStopConfirmation(response);
+            dispatch({ type: "addAssistantMessage", threadId, text: "Session stopped." });
+          })
+          .catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            pushThreadErrorMessage(threadId, `Could not confirm stop: ${message}. A command may still be running.`);
+          })
+          .finally(() => {
+            queuedStopsInFlightRef.current.delete(threadId);
+            pendingInterruptsRef.current.delete(threadId);
+          });
       }
     },
     [
@@ -256,6 +267,7 @@ export function useThreadTurnEvents({
       getActiveTurnId,
       markProcessing,
       pendingInterruptsRef,
+      pushThreadErrorMessage,
       setActiveTurnId,
     ],
   );

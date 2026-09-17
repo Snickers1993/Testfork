@@ -109,6 +109,19 @@ pub(crate) async fn list_workspaces_core(
     result
 }
 
+/// The shared server can outlive a worktree after other workspaces attach to it.
+/// Keep its OS working directory in the parent; task paths remain on the entry.
+pub(super) fn shared_session_process_cwd(
+    entry: &WorkspaceEntry,
+    parent: Option<&WorkspaceEntry>,
+) -> PathBuf {
+    let launch_entry = if entry.kind.is_worktree() {
+        parent.unwrap_or(entry)
+    } else {
+        entry
+    };
+    PathBuf::from(&launch_entry.path)
+}
 pub(super) async fn resolve_entry_and_parent(
     workspaces: &Mutex<HashMap<String, WorkspaceEntry>>,
     workspace_id: &str,

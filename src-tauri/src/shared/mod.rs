@@ -17,3 +17,4 @@ pub(crate) mod workspaces_core;
 pub(crate) mod worktree_core;
 
 pub(crate) mod server_requests;
+pub(crate) mod turn_stop;

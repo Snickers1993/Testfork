@@ -323,7 +323,7 @@ export function ComposerInput({
               )}
             </button>
             <button
-              className={`composer-action${canStop ? " is-stop" : " is-send"}${
+              className={`composer-action${canStop ? " is-stop composer-action--stop" : " is-send"}${
                 canStop && isProcessing ? " is-loading" : ""
               }`}
               onClick={handleActionClick}
@@ -333,10 +333,11 @@ export function ComposerInput({
             >
               {canStop ? (
                 <>
-                  <span className="composer-action-stop-square" aria-hidden />
-                  {isProcessing && (
-                    <span className="composer-action-spinner" aria-hidden />
-                  )}
+                  <span className="composer-action-stop-icon" aria-hidden>
+                    <span className="composer-action-stop-square" />
+                    {isProcessing && <span className="composer-action-spinner" />}
+                  </span>
+                  <span>Stop</span>
                 </>
               ) : (
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden>

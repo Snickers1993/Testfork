@@ -13,7 +13,7 @@ use crate::shared::process_core::kill_child_process_tree;
 use crate::types::{AppSettings, WorkspaceEntry};
 
 use super::connect::workspace_session_spawn_lock;
-use super::helpers::resolve_entry_and_parent;
+use super::helpers::{resolve_entry_and_parent, shared_session_process_cwd};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -31,7 +31,7 @@ pub(crate) async fn set_workspace_runtime_codex_args_core<F, Fut>(
     spawn_session: F,
 ) -> Result<WorkspaceRuntimeCodexArgsResult, String>
 where
-    F: Fn(WorkspaceEntry, Option<String>, Option<String>, Option<PathBuf>) -> Fut,
+    F: Fn(WorkspaceEntry, Option<String>, Option<String>, Option<PathBuf>, PathBuf) -> Fut,
     Fut: Future<Output = Result<Arc<WorkspaceSession>, String>>,
 {
     let (entry, parent_entry) = resolve_entry_and_parent(workspaces, &workspace_id).await?;
@@ -83,8 +83,14 @@ where
     }
 
     let codex_home = resolve_workspace_codex_home(&entry, parent_entry.as_ref());
-    let new_session =
-        spawn_session(entry.clone(), default_bin, target_args.clone(), codex_home).await?;
+    let new_session = spawn_session(
+        entry.clone(),
+        default_bin,
+        target_args.clone(),
+        codex_home,
+        shared_session_process_cwd(&entry, parent_entry.as_ref()),
+    )
+    .await?;
     let workspace_ids = {
         let mut sessions = sessions.lock().await;
         let keys: Vec<String> = sessions.keys().cloned().collect();
@@ -129,8 +135,8 @@ where
 mod tests {
     use super::*;
 
-    use std::process::Stdio;
     use std::collections::HashSet;
+    use std::process::Stdio;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     use tokio::process::Command;
@@ -168,6 +174,8 @@ mod tests {
         let stdin = child.stdin.take().expect("dummy child stdin");
 
         WorkspaceSession {
+            command_turns: Mutex::new(Default::default()),
+            command_turns_changed: tokio::sync::Notify::new(),
             session_id: uuid::Uuid::new_v4().to_string(),
             codex_args,
             child: Mutex::new(child),
@@ -202,7 +210,7 @@ mod tests {
                 &workspaces,
                 &sessions,
                 &app_settings,
-                move |entry, _bin, args, _home| {
+                move |entry, _bin, args, _home, _process_cwd| {
                     let spawn_calls_ref = spawn_calls_ref.clone();
                     async move {
                         spawn_calls_ref.fetch_add(1, Ordering::SeqCst);
@@ -242,7 +250,7 @@ mod tests {
                 &workspaces,
                 &sessions,
                 &app_settings,
-                move |entry, _bin, args, _home| {
+                move |entry, _bin, args, _home, _process_cwd| {
                     let spawn_calls_ref = spawn_calls_ref.clone();
                     async move {
                         spawn_calls_ref.fetch_add(1, Ordering::SeqCst);
@@ -282,7 +290,7 @@ mod tests {
                 &workspaces,
                 &sessions,
                 &app_settings,
-                move |entry, _bin, args, _home| {
+                move |entry, _bin, args, _home, _process_cwd| {
                     let spawn_calls_ref = spawn_calls_ref.clone();
                     async move {
                         spawn_calls_ref.fetch_add(1, Ordering::SeqCst);

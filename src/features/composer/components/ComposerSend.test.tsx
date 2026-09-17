@@ -36,6 +36,8 @@ type HarnessProps = {
     appMentions?: AppMention[],
     submitIntent?: ComposerSendIntent,
   ) => void;
+  onStop?: () => void;
+  canStop?: boolean;
   apps?: AppOption[];
   isProcessing?: boolean;
   followUpMessageBehavior?: FollowUpMessageBehavior;
@@ -45,6 +47,8 @@ type HarnessProps = {
 
 function ComposerHarness({
   onSend,
+  onStop = () => {},
+  canStop = false,
   apps = [],
   isProcessing = false,
   followUpMessageBehavior = "queue",
@@ -57,8 +61,8 @@ function ComposerHarness({
   return (
     <Composer
       onSend={onSend}
-      onStop={() => {}}
-      canStop={false}
+      onStop={onStop}
+      canStop={canStop}
       isProcessing={isProcessing}
       appsEnabled={true}
       steerAvailable={steerAvailable}
@@ -96,6 +100,26 @@ describe("Composer send triggers", () => {
     vi.restoreAllMocks();
   });
 
+  it("shows a visible Stop label while active and keeps Send unchanged", () => {
+    const onStop = vi.fn();
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <ComposerHarness onSend={onSend} onStop={onStop} canStop isProcessing />,
+    );
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(stop.textContent).toBe("Stop");
+    expect(stop.getAttribute("title")).toBe("Stop");
+    expect(stop.querySelector(".composer-action-stop-square")).not.toBeNull();
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(onSend).not.toHaveBeenCalled();
+
+    rerender(<ComposerHarness onSend={onSend} onStop={onStop} />);
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send.textContent).toBe("");
+    expect(send.querySelector("svg")).not.toBeNull();
+  });
   it("sends once on Enter", () => {
     const onSend = vi.fn();
     render(<ComposerHarness onSend={onSend} />);

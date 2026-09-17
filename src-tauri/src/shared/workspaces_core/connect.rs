@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use tokio::sync::Mutex;
 
@@ -12,7 +12,7 @@ use crate::codex::home::resolve_workspace_codex_home;
 use crate::shared::process_core::kill_child_process_tree;
 use crate::types::{AppSettings, WorkspaceEntry};
 
-use super::helpers::resolve_entry_and_parent;
+use super::helpers::{resolve_entry_and_parent, shared_session_process_cwd};
 
 static CONNECT_WORKSPACE_SPAWN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -59,7 +59,7 @@ pub(crate) async fn connect_workspace_core<F, Fut>(
     spawn_session: F,
 ) -> Result<(), String>
 where
-    F: Fn(WorkspaceEntry, Option<String>, Option<String>, Option<PathBuf>) -> Fut,
+    F: Fn(WorkspaceEntry, Option<String>, Option<String>, Option<PathBuf>, PathBuf) -> Fut,
     Fut: Future<Output = Result<Arc<WorkspaceSession>, String>>,
 {
     let (entry, parent_entry) = resolve_entry_and_parent(workspaces, &workspace_id).await?;
@@ -91,7 +91,14 @@ where
         )
     };
     let codex_home = resolve_workspace_codex_home(&entry, parent_entry.as_ref());
-    let session = spawn_session(entry.clone(), default_bin, codex_args, codex_home).await?;
+    let session = spawn_session(
+        entry.clone(),
+        default_bin,
+        codex_args,
+        codex_home,
+        shared_session_process_cwd(&entry, parent_entry.as_ref()),
+    )
+    .await?;
     session
         .register_workspace_with_path(&entry.id, Some(&entry.path))
         .await;
@@ -149,7 +156,14 @@ mod tests {
         }
     }
 
-    fn make_session(_entry: WorkspaceEntry) -> Arc<WorkspaceSession> {
+    fn make_session(entry: WorkspaceEntry) -> Arc<WorkspaceSession> {
+        make_session_in(entry, None)
+    }
+
+    fn make_session_in(
+        _entry: WorkspaceEntry,
+        process_cwd: Option<&PathBuf>,
+    ) -> Arc<WorkspaceSession> {
         let mut cmd = if cfg!(windows) {
             let mut cmd = Command::new("cmd");
             cmd.args(["/C", "more"]);
@@ -160,7 +174,11 @@ mod tests {
             cmd
         };
 
-        cmd.stdin(Stdio::piped())
+        if let Some(process_cwd) = process_cwd {
+            cmd.current_dir(process_cwd);
+        }
+        cmd.kill_on_drop(true)
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
@@ -168,6 +186,8 @@ mod tests {
         let stdin = child.stdin.take().expect("dummy child stdin");
 
         Arc::new(WorkspaceSession {
+            command_turns: Mutex::new(Default::default()),
+            command_turns_changed: tokio::sync::Notify::new(),
             session_id: uuid::Uuid::new_v4().to_string(),
             codex_args: None,
             child: Mutex::new(child),
@@ -203,7 +223,7 @@ mod tests {
                 &workspaces,
                 &sessions,
                 &app_settings,
-                move |_entry, _default_bin, _codex_args, _codex_home| {
+                move |_entry, _default_bin, _codex_args, _codex_home, _process_cwd| {
                     let spawn_calls_ref = spawn_calls_ref.clone();
                     async move {
                         spawn_calls_ref.fetch_add(1, Ordering::SeqCst);
@@ -235,7 +255,7 @@ mod tests {
                 &workspaces,
                 &sessions,
                 &app_settings,
-                move |_entry, _default_bin, _codex_args, _codex_home| {
+                move |_entry, _default_bin, _codex_args, _codex_home, _process_cwd| {
                     let spawn_calls_ref = spawn_calls_ref.clone();
                     let entry_for_spawn = entry_for_spawn.clone();
                     async move {
@@ -250,6 +270,145 @@ mod tests {
             assert_eq!(spawn_calls.load(Ordering::SeqCst), 1);
             assert!(sessions.lock().await.contains_key(&entry.id));
             kill_session_by_id(&sessions, &entry.id).await;
+        });
+    }
+
+    #[test]
+    fn first_worktree_connection_keeps_parent_server_alive_after_worktree_removal() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let fixture =
+                std::env::temp_dir().join(format!("moonveil-shared-cwd-{}", uuid::Uuid::new_v4()));
+            let parent_path = fixture.join("parent");
+            let worktree_path = fixture.join("worktree");
+            std::fs::create_dir_all(&parent_path).unwrap();
+            std::fs::create_dir_all(&worktree_path).unwrap();
+            let mut parent = make_workspace_entry("parent");
+            parent.path = parent_path.to_string_lossy().into_owned();
+            let mut worktree = make_workspace_entry("worktree");
+            worktree.path = worktree_path.to_string_lossy().into_owned();
+            worktree.kind = WorkspaceKind::Worktree;
+            worktree.parent_id = Some(parent.id.clone());
+            let workspaces = Mutex::new(HashMap::from([
+                (parent.id.clone(), parent.clone()),
+                (worktree.id.clone(), worktree.clone()),
+            ]));
+            let sessions = Mutex::new(HashMap::<String, Arc<WorkspaceSession>>::new());
+            let app_settings = Mutex::new(AppSettings::default());
+
+            connect_workspace_core(
+                worktree.id.clone(),
+                &workspaces,
+                &sessions,
+                &app_settings,
+                |entry, _default_bin, _codex_args, _codex_home, process_cwd| {
+                    assert_eq!(entry.path, worktree.path);
+                    assert_eq!(process_cwd, parent_path);
+                    std::future::ready(Ok(make_session_in(entry, Some(&process_cwd))))
+                },
+            )
+            .await
+            .expect("first worktree connection should spawn in its parent");
+            connect_workspace_core(
+                parent.id.clone(),
+                &workspaces,
+                &sessions,
+                &app_settings,
+                |_entry, _default_bin, _codex_args, _codex_home, _process_cwd| {
+                    std::future::ready(Err("parent should reuse the shared server".to_string()))
+                },
+            )
+            .await
+            .expect("parent should attach to the first worktree's shared server");
+            let shared_session = {
+                let sessions = sessions.lock().await;
+                assert!(Arc::ptr_eq(&sessions[&parent.id], &sessions[&worktree.id]));
+                sessions[&parent.id].clone()
+            };
+            assert_eq!(
+                shared_session.workspace_roots.lock().await[&worktree.id],
+                if cfg!(windows) {
+                    worktree.path.replace('\\', "/").to_ascii_lowercase()
+                } else {
+                    worktree.path.clone()
+                }
+            );
+
+            super::super::worktree::remove_worktree_core(
+                worktree.id.clone(),
+                &workspaces,
+                &sessions,
+                &fixture.join("workspaces.json"),
+                |_path, _args| {
+                    std::future::ready(Err("fixture is not registered with Git".to_string()))
+                },
+                |error| error == "fixture is not registered with Git",
+                |path| std::fs::remove_dir_all(path).map_err(|error| error.to_string()),
+            )
+            .await
+            .expect("removal must release the worktree without killing the shared parent server");
+
+            assert!(!worktree_path.exists());
+            assert!(!workspaces.lock().await.contains_key(&worktree.id));
+            assert_eq!(workspaces.lock().await[&parent.id].path, parent.path);
+            assert!(Arc::ptr_eq(
+                &sessions.lock().await[&parent.id],
+                &shared_session
+            ));
+            assert!(!shared_session
+                .workspace_roots
+                .lock()
+                .await
+                .contains_key(&worktree.id));
+            assert!(session_process_is_alive(&shared_session).await);
+            kill_session_by_id(&sessions, &parent.id).await;
+            assert!(!session_process_is_alive(&shared_session).await);
+            std::fs::remove_dir_all(&fixture).unwrap();
+        });
+    }
+
+    #[test]
+    fn adding_worktree_without_a_session_uses_parent_process_cwd() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let fixture = std::env::temp_dir().join(format!(
+                "moonveil-new-worktree-cwd-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let parent_path = fixture.join("parent");
+            std::fs::create_dir_all(&parent_path).unwrap();
+            let mut parent = make_workspace_entry("parent");
+            parent.path = parent_path.to_string_lossy().into_owned();
+            let workspaces = Mutex::new(HashMap::from([(parent.id.clone(), parent.clone())]));
+            let sessions = Mutex::new(HashMap::<String, Arc<WorkspaceSession>>::new());
+            let settings = Mutex::new(AppSettings::default());
+            let spawn_calls = AtomicUsize::new(0);
+            let expected_worktree_path = fixture.join("worktrees").join(&parent.id).join("fixture");
+
+            let result = super::super::worktree::add_worktree_core(
+                parent.id.clone(),
+                "fixture".to_string(),
+                None,
+                false,
+                &fixture,
+                &workspaces,
+                &sessions,
+                &settings,
+                &fixture.join("workspaces.json"),
+                str::to_string,
+                |root, name| Ok(root.join(name)),
+                |_path, _branch| std::future::ready(Ok(false)),
+                Some(|_path: &PathBuf, _branch: &str| std::future::ready(Ok(None::<String>))),
+                |_path, _args| std::future::ready(Ok(())),
+                |entry, _default_bin, _codex_args, _codex_home, process_cwd| {
+                    spawn_calls.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(PathBuf::from(entry.path), expected_worktree_path);
+                    assert_eq!(process_cwd, parent_path);
+                    std::future::ready(Err("fixture stopped before server startup".to_string()))
+                },
+            )
+            .await;
+            assert_eq!(result.unwrap_err(), "fixture stopped before server startup");
+            assert_eq!(spawn_calls.load(Ordering::SeqCst), 1);
+            std::fs::remove_dir_all(&fixture).unwrap();
         });
     }
 }

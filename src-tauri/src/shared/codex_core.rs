@@ -583,11 +583,52 @@ pub(crate) async fn turn_interrupt_core(
     thread_id: String,
     turn_id: String,
 ) -> Result<Value, String> {
+    if thread_id.trim().is_empty() || turn_id.trim().is_empty() || turn_id == "pending" {
+        return Err("Cannot stop before Codex provides the native turn ID".into());
+    }
     let session = get_session_clone(sessions, &workspace_id).await?;
-    let params = json!({ "threadId": thread_id, "turnId": turn_id });
-    session
-        .send_request_for_workspace(&workspace_id, "turn/interrupt", params)
+    session.command_turns.lock().await.begin_stop(&thread_id)?;
+    let outcome = async {
+        let params = json!({ "threadId": thread_id, "turnId": turn_id });
+        let response = session
+            .send_request_for_workspace(&workspace_id, "turn/interrupt", params)
+            .await?;
+        crate::shared::turn_stop::rpc_result(response, "turn/interrupt")?;
+        // Turn completion does not terminate native background processes. It only
+        // establishes the native turn boundary before ownership reconciliation.
+        timeout(Duration::from_secs(15), async {
+            loop {
+                let changed = session.command_turns_changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if session
+                    .command_turns
+                    .lock()
+                    .await
+                    .is_completed(&thread_id, &turn_id)
+                {
+                    break;
+                }
+                changed.await;
+            }
+        })
         .await
+        .map_err(|_| {
+            "Codex did not confirm the interrupted turn completed; process stop is unconfirmed"
+                .to_string()
+        })?;
+        let stopped = crate::shared::turn_stop::stop_owned_terminals(
+            &thread_id,
+            &turn_id,
+            &session.command_turns,
+            |method, params| session.send_request_for_workspace(&workspace_id, method, params),
+        )
+        .await?;
+        Ok(json!({"result":{"interrupted":true,"processesStopped":stopped}}))
+    }
+    .await;
+    session.command_turns.lock().await.end_stop(&thread_id);
+    outcome
 }
 
 pub(crate) async fn start_review_core(

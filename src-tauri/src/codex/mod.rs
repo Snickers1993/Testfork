@@ -37,6 +37,7 @@ pub(crate) async fn spawn_workspace_session(
     codex_args: Option<String>,
     app_handle: AppHandle,
     codex_home: Option<PathBuf>,
+    process_cwd: PathBuf,
 ) -> Result<Arc<WorkspaceSession>, String> {
     let client_version = app_handle.package_info().version.to_string();
     let event_sink = TauriEventSink::new(app_handle);
@@ -47,6 +48,7 @@ pub(crate) async fn spawn_workspace_session(
         codex_home,
         client_version,
         event_sink,
+        process_cwd,
     )
     .await
 }
@@ -90,9 +92,13 @@ pub(crate) async fn start_thread(
 
     let personality = state.app_settings.lock().await.personality.clone();
     codex_core::start_thread_core(
-        &state.sessions, &state.workspaces, workspace_id, developer_instructions,
+        &state.sessions,
+        &state.workspaces,
+        workspace_id,
+        developer_instructions,
         Some(personality),
-    ).await
+    )
+    .await
 }
 
 #[tauri::command]
@@ -513,14 +519,7 @@ pub(crate) async fn start_review(
         .await;
     }
 
-    codex_core::start_review_core(
-        &state.sessions,
-        workspace_id,
-        thread_id,
-        target,
-        delivery,
-    )
-    .await
+    codex_core::start_review_core(&state.sessions, workspace_id, thread_id, target, delivery).await
 }
 
 #[tauri::command]

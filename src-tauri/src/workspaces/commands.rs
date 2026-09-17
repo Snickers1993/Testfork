@@ -30,8 +30,16 @@ fn spawn_with_app(
     default_bin: Option<String>,
     codex_args: Option<String>,
     codex_home: Option<PathBuf>,
+    process_cwd: PathBuf,
 ) -> impl std::future::Future<Output = Result<Arc<WorkspaceSession>, String>> {
-    spawn_workspace_session(entry, default_bin, codex_args, app.clone(), codex_home)
+    spawn_workspace_session(
+        entry,
+        default_bin,
+        codex_args,
+        app.clone(),
+        codex_home,
+        process_cwd,
+    )
 }
 
 fn workspace_remote_params<T: serde::Serialize>(request: &T) -> Result<serde_json::Value, String> {
@@ -117,7 +125,9 @@ pub(crate) async fn set_workspace_runtime_codex_args(
         &state.workspaces,
         &state.sessions,
         &state.app_settings,
-        |entry, default_bin, args, home| spawn_with_app(&app, entry, default_bin, args, home),
+        |entry, default_bin, args, home, process_cwd| {
+            spawn_with_app(&app, entry, default_bin, args, home, process_cwd)
+        },
     )
     .await
 }
@@ -167,8 +177,15 @@ pub(crate) async fn add_workspace(
         &state.sessions,
         &state.app_settings,
         &state.storage_path,
-        |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+        |entry, default_bin, codex_args, codex_home, process_cwd| {
+            spawn_with_app(
+                &app,
+                entry,
+                default_bin,
+                codex_args,
+                codex_home,
+                process_cwd,
+            )
         },
     )
     .await
@@ -207,8 +224,15 @@ pub(crate) async fn add_workspace_from_git_url(
         &state.sessions,
         &state.app_settings,
         &state.storage_path,
-        |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+        |entry, default_bin, codex_args, codex_home, process_cwd| {
+            spawn_with_app(
+                &app,
+                entry,
+                default_bin,
+                codex_args,
+                codex_home,
+                process_cwd,
+            )
         },
     )
     .await
@@ -230,8 +254,15 @@ pub(crate) async fn add_clone(
         &state.sessions,
         &state.app_settings,
         &state.storage_path,
-        |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+        |entry, default_bin, codex_args, codex_home, process_cwd| {
+            spawn_with_app(
+                &app,
+                entry,
+                default_bin,
+                codex_args,
+                codex_home,
+                process_cwd,
+            )
         },
     )
     .await
@@ -292,8 +323,15 @@ pub(crate) async fn add_worktree(
                 run_git_command_owned(repo, args_owned)
             })
         },
-        |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+        |entry, default_bin, codex_args, codex_home, process_cwd| {
+            spawn_with_app(
+                &app,
+                entry,
+                default_bin,
+                codex_args,
+                codex_home,
+                process_cwd,
+            )
         },
     )
     .await
@@ -474,8 +512,15 @@ pub(crate) async fn rename_worktree(
                 run_git_command_owned(repo, args_owned)
             })
         },
-        |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+        |entry, default_bin, codex_args, codex_home, process_cwd| {
+            spawn_with_app(
+                &app,
+                entry,
+                default_bin,
+                codex_args,
+                codex_home,
+                process_cwd,
+            )
         },
     )
     .await
@@ -578,8 +623,15 @@ pub(crate) async fn update_workspace_settings(
         |workspaces, workspace_id, next_settings| {
             apply_workspace_settings_update(workspaces, workspace_id, next_settings)
         },
-        |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+        |entry, default_bin, codex_args, codex_home, process_cwd| {
+            spawn_with_app(
+                &app,
+                entry,
+                default_bin,
+                codex_args,
+                codex_home,
+                process_cwd,
+            )
         },
     )
     .await
@@ -608,8 +660,15 @@ pub(crate) async fn connect_workspace(
         &state.workspaces,
         &state.sessions,
         &state.app_settings,
-        |entry, default_bin, codex_args, codex_home| {
-            spawn_with_app(&app, entry, default_bin, codex_args, codex_home)
+        |entry, default_bin, codex_args, codex_home, process_cwd| {
+            spawn_with_app(
+                &app,
+                entry,
+                default_bin,
+                codex_args,
+                codex_home,
+                process_cwd,
+            )
         },
     )
     .await

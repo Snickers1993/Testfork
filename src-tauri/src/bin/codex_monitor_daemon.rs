@@ -103,6 +103,7 @@ fn spawn_with_client(
     default_bin: Option<String>,
     codex_args: Option<String>,
     codex_home: Option<PathBuf>,
+    process_cwd: PathBuf,
 ) -> impl std::future::Future<Output = Result<Arc<WorkspaceSession>, String>> {
     spawn_workspace_session(
         entry,
@@ -111,6 +112,7 @@ fn spawn_with_client(
         codex_home,
         client_version,
         event_sink,
+        process_cwd,
     )
 }
 
@@ -259,7 +261,7 @@ impl DaemonState {
             &self.sessions,
             &self.app_settings,
             &self.storage_path,
-            move |entry, default_bin, codex_args, codex_home| {
+            move |entry, default_bin, codex_args, codex_home, process_cwd| {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
@@ -267,6 +269,7 @@ impl DaemonState {
                     default_bin,
                     codex_args,
                     codex_home,
+                    process_cwd,
                 )
             },
         )
@@ -289,7 +292,7 @@ impl DaemonState {
             &self.sessions,
             &self.app_settings,
             &self.storage_path,
-            move |entry, default_bin, codex_args, codex_home| {
+            move |entry, default_bin, codex_args, codex_home, process_cwd| {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
@@ -297,6 +300,7 @@ impl DaemonState {
                     default_bin,
                     codex_args,
                     codex_home,
+                    process_cwd,
                 )
             },
         )
@@ -337,7 +341,7 @@ impl DaemonState {
             |root, args| {
                 workspaces_core::run_git_command_unit(root, args, git_core::run_git_command_owned)
             },
-            move |entry, default_bin, codex_args, codex_home| {
+            move |entry, default_bin, codex_args, codex_home, process_cwd| {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
@@ -345,6 +349,7 @@ impl DaemonState {
                     default_bin,
                     codex_args,
                     codex_home,
+                    process_cwd,
                 )
             },
         )
@@ -438,7 +443,7 @@ impl DaemonState {
             |root, args| {
                 workspaces_core::run_git_command_unit(root, args, git_core::run_git_command_owned)
             },
-            move |entry, default_bin, codex_args, codex_home| {
+            move |entry, default_bin, codex_args, codex_home, process_cwd| {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
@@ -446,6 +451,7 @@ impl DaemonState {
                     default_bin,
                     codex_args,
                     codex_home,
+                    process_cwd,
                 )
             },
         )
@@ -511,7 +517,7 @@ impl DaemonState {
             |workspaces, workspace_id, next_settings| {
                 apply_workspace_settings_update(workspaces, workspace_id, next_settings)
             },
-            move |entry, default_bin, codex_args, codex_home| {
+            move |entry, default_bin, codex_args, codex_home, process_cwd| {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
@@ -519,6 +525,7 @@ impl DaemonState {
                     default_bin,
                     codex_args,
                     codex_home,
+                    process_cwd,
                 )
             },
         )
@@ -539,7 +546,7 @@ impl DaemonState {
             &self.workspaces,
             &self.sessions,
             &self.app_settings,
-            move |entry, default_bin, codex_args, codex_home| {
+            move |entry, default_bin, codex_args, codex_home, process_cwd| {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
@@ -547,6 +554,7 @@ impl DaemonState {
                     default_bin,
                     codex_args,
                     codex_home,
+                    process_cwd,
                 )
             },
         )
@@ -565,7 +573,7 @@ impl DaemonState {
             &self.workspaces,
             &self.sessions,
             &self.app_settings,
-            move |entry, default_bin, next_args, codex_home| {
+            move |entry, default_bin, next_args, codex_home, process_cwd| {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
@@ -573,6 +581,7 @@ impl DaemonState {
                     default_bin,
                     next_args,
                     codex_home,
+                    process_cwd,
                 )
             },
         )
@@ -687,9 +696,13 @@ impl DaemonState {
     ) -> Result<Value, String> {
         let personality = self.app_settings.lock().await.personality.clone();
         codex_core::start_thread_core(
-            &self.sessions, &self.workspaces, workspace_id, developer_instructions,
+            &self.sessions,
+            &self.workspaces,
+            workspace_id,
+            developer_instructions,
             Some(personality),
-        ).await
+        )
+        .await
     }
 
     async fn resume_thread(
@@ -700,11 +713,7 @@ impl DaemonState {
         codex_core::resume_thread_core(&self.sessions, workspace_id, thread_id).await
     }
 
-    async fn read_thread(
-        &self,
-        workspace_id: String,
-        thread_id: String,
-    ) -> Result<Value, String> {
+    async fn read_thread(&self, workspace_id: String, thread_id: String) -> Result<Value, String> {
         codex_core::read_thread_core(&self.sessions, workspace_id, thread_id).await
     }
 
@@ -773,8 +782,7 @@ impl DaemonState {
         limit: Option<u32>,
         sort_key: Option<String>,
     ) -> Result<Value, String> {
-        codex_core::list_threads_core(&self.sessions, workspace_id, cursor, limit, sort_key)
-            .await
+        codex_core::list_threads_core(&self.sessions, workspace_id, cursor, limit, sort_key).await
     }
 
     async fn list_mcp_server_status(
@@ -974,7 +982,7 @@ impl DaemonState {
             &self.sessions,
             &self.app_settings,
             &self.storage_path,
-            |entry, default_bin, codex_args, codex_home| {
+            |entry, default_bin, codex_args, codex_home, process_cwd| {
                 spawn_with_client(
                     self.event_sink.clone(),
                     client_version.clone(),
@@ -982,6 +990,7 @@ impl DaemonState {
                     default_bin,
                     codex_args,
                     codex_home,
+                    process_cwd,
                 )
             },
         )
@@ -1677,6 +1686,8 @@ mod tests {
         let stdin = child.stdin.take().expect("dummy child stdin");
 
         Arc::new(WorkspaceSession {
+            command_turns: Mutex::new(Default::default()),
+            command_turns_changed: tokio::sync::Notify::new(),
             session_id: uuid::Uuid::new_v4().to_string(),
             codex_args: None,
             child: Mutex::new(child),

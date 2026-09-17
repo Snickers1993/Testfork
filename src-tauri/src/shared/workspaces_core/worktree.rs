@@ -17,8 +17,8 @@ use crate::types::{
 
 use super::connect::{kill_session_by_id, take_live_shared_session, workspace_session_spawn_lock};
 use super::helpers::{
-    copy_agents_md_from_parent_to_worktree, normalize_setup_script, workspace_path_to_string,
-    worktree_setup_marker_path, AGENTS_MD_FILE_NAME,
+    copy_agents_md_from_parent_to_worktree, normalize_setup_script, shared_session_process_cwd,
+    workspace_path_to_string, worktree_setup_marker_path, AGENTS_MD_FILE_NAME,
 };
 
 pub(crate) async fn worktree_setup_status_core(
@@ -103,7 +103,8 @@ pub(crate) async fn add_worktree_core<
     spawn_session: FSpawn,
 ) -> Result<WorkspaceInfo, String>
 where
-    FSpawn: Fn(WorkspaceEntry, Option<String>, Option<String>, Option<PathBuf>) -> FutSpawn,
+    FSpawn:
+        Fn(WorkspaceEntry, Option<String>, Option<String>, Option<PathBuf>, PathBuf) -> FutSpawn,
     FutSpawn: Future<Output = Result<Arc<WorkspaceSession>, String>>,
     FSanitize: Fn(&str) -> String,
     FUniquePath: Fn(&PathBuf, &str) -> Result<PathBuf, String>,
@@ -233,7 +234,14 @@ where
             )
         };
         let codex_home = resolve_workspace_codex_home(&entry, Some(&parent_entry));
-        spawn_session(entry.clone(), default_bin, codex_args, codex_home).await?
+        spawn_session(
+            entry.clone(),
+            default_bin,
+            codex_args,
+            codex_home,
+            shared_session_process_cwd(&entry, Some(&parent_entry)),
+        )
+        .await?
     };
 
     {
@@ -358,7 +366,8 @@ pub(crate) async fn rename_worktree_core<
     _spawn_session: FSpawn,
 ) -> Result<WorkspaceInfo, String>
 where
-    FSpawn: Fn(WorkspaceEntry, Option<String>, Option<String>, Option<PathBuf>) -> FutSpawn,
+    FSpawn:
+        Fn(WorkspaceEntry, Option<String>, Option<String>, Option<PathBuf>, PathBuf) -> FutSpawn,
     FutSpawn: Future<Output = Result<Arc<WorkspaceSession>, String>>,
     FResolveGitRoot: Fn(&WorkspaceEntry) -> Result<PathBuf, String>,
     FUniqueBranch: Fn(&PathBuf, &str) -> FutUniqueBranch,

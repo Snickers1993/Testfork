@@ -1,4 +1,5 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
+import { requireNativeStopConfirmation } from "@utils/turnStop";
 import type { Dispatch, MutableRefObject } from "react";
 import * as Sentry from "@sentry/react";
 import type {
@@ -131,6 +132,7 @@ export function useThreadMessaging({
   registerDetachedReviewChild,
   renameThread,
 }: UseThreadMessagingOptions) {
+  const stoppingThreadsRef = useRef(new Set<string>());
   const sendMessageToThread = useCallback(
     async (
       workspace: WorkspaceInfo,
@@ -429,39 +431,40 @@ export function useThreadMessaging({
   );
 
   const interruptTurn = useCallback(async () => {
-    if (!activeWorkspace || !activeThreadId) {
+    if (!activeWorkspace || !activeThreadId || stoppingThreadsRef.current.has(activeThreadId)) {
       return;
     }
-    const activeTurnId = activeTurnIdByThread[activeThreadId] ?? null;
-    const turnId = activeTurnId ?? "pending";
-    markProcessing(activeThreadId, false);
-    setActiveTurnId(activeThreadId, null);
+    const turnId = activeTurnIdByThread[activeThreadId] ?? null;
+    if (!turnId) {
+      if (!pendingInterruptsRef.current.has(activeThreadId)) {
+        pendingInterruptsRef.current.add(activeThreadId);
+        dispatch({
+          type: "addAssistantMessage",
+          threadId: activeThreadId,
+          text: "Stop requested. Waiting for Codex to identify the running turn.",
+        });
+      }
+      return;
+    }
+    if (pendingInterruptsRef.current.has(activeThreadId)) return;
+    stoppingThreadsRef.current.add(activeThreadId);
     dispatch({
       type: "addAssistantMessage",
       threadId: activeThreadId,
-      text: "Session stopped.",
+      text: "Stop requested. Waiting for Codex to stop this turn and its processes.",
     });
-    if (!activeTurnId) {
-      pendingInterruptsRef.current.add(activeThreadId);
-    }
     onDebug?.({
       id: `${Date.now()}-client-turn-interrupt`,
       timestamp: Date.now(),
       source: "client",
       label: "turn/interrupt",
-      payload: {
-        workspaceId: activeWorkspace.id,
-        threadId: activeThreadId,
-        turnId,
-        queued: !activeTurnId,
-      },
+      payload: { workspaceId: activeWorkspace.id, threadId: activeThreadId, turnId },
     });
     try {
-      const response = await interruptTurnService(
-        activeWorkspace.id,
-        activeThreadId,
-        turnId,
-      );
+      const response = await interruptTurnService(activeWorkspace.id, activeThreadId, turnId);
+      requireNativeStopConfirmation(response);
+      // Native events own processing/active-turn state; a newer turn may already exist.
+      dispatch({ type: "addAssistantMessage", threadId: activeThreadId, text: "Session stopped." });
       onDebug?.({
         id: `${Date.now()}-server-turn-interrupt`,
         timestamp: Date.now(),
@@ -470,25 +473,22 @@ export function useThreadMessaging({
         payload: response,
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      pushThreadErrorMessage(
+        activeThreadId,
+        `Could not confirm stop: ${message}. A command may still be running.`,
+      );
       onDebug?.({
         id: `${Date.now()}-client-turn-interrupt-error`,
         timestamp: Date.now(),
         source: "error",
         label: "turn/interrupt error",
-        payload: error instanceof Error ? error.message : String(error),
+        payload: message,
       });
+    } finally {
+      stoppingThreadsRef.current.delete(activeThreadId);
     }
-  }, [
-    activeThreadId,
-    activeTurnIdByThread,
-    activeWorkspace,
-    dispatch,
-    markProcessing,
-    onDebug,
-    pendingInterruptsRef,
-    setActiveTurnId,
-  ]);
-
+  }, [activeThreadId, activeTurnIdByThread, activeWorkspace, dispatch, onDebug, pendingInterruptsRef, pushThreadErrorMessage]);
   const startReviewTarget = useCallback(
     async (target: ReviewTarget, workspaceIdOverride?: string): Promise<boolean> => {
       const workspaceId = workspaceIdOverride ?? activeWorkspace?.id ?? null;

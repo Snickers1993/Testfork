@@ -776,9 +776,9 @@ describe("useThreads UX integration", () => {
     });
   });
 
-  it("interrupts immediately even before a turn id is available", async () => {
+  it("queues stop until the real native turn ID is available", async () => {
     const interruptMock = vi.mocked(interruptTurn);
-    interruptMock.mockResolvedValue({ result: {} });
+    interruptMock.mockResolvedValue({ result: { interrupted: true, processesStopped: 0 } });
 
     const { result } = renderHook(() =>
       useThreads({
@@ -795,7 +795,7 @@ describe("useThreads UX integration", () => {
       await result.current.interruptTurn();
     });
 
-    expect(interruptMock).toHaveBeenCalledWith("ws-1", "thread-1", "pending");
+    expect(interruptMock).not.toHaveBeenCalled();
 
     act(() => {
       handlers?.onTurnStarted?.("ws-1", "thread-1", "turn-1");
@@ -804,7 +804,7 @@ describe("useThreads UX integration", () => {
     await waitFor(() => {
       expect(interruptMock).toHaveBeenCalledWith("ws-1", "thread-1", "turn-1");
     });
-    expect(interruptMock).toHaveBeenCalledTimes(2);
+    expect(interruptMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps queued sends blocked while request user input is pending", async () => {
@@ -909,7 +909,7 @@ describe("useThreads UX integration", () => {
 
   it("keeps active turn id after request user input so interrupt targets the running turn", async () => {
     const interruptMock = vi.mocked(interruptTurn);
-    interruptMock.mockResolvedValue({ result: {} });
+    interruptMock.mockResolvedValue({ result: { interrupted: true, processesStopped: 0 } });
 
     const { result } = renderHook(() =>
       useThreads({

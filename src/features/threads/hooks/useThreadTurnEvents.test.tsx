@@ -423,21 +423,19 @@ describe("useThreadTurnEvents", () => {
     expect(interruptTurn).not.toHaveBeenCalled();
   });
 
-  it("interrupts immediately when a pending interrupt is queued", () => {
-    const { result, markProcessing, setActiveTurnId, pendingInterruptsRef } =
+  it("interrupts the real turn when a pending stop is queued", async () => {
+    const { result, markProcessing, setActiveTurnId, pendingInterruptsRef, dispatch } =
       makeOptions({ pendingInterrupts: ["thread-1"] });
-    vi.mocked(interruptTurn).mockResolvedValue({});
-
-    act(() => {
+    vi.mocked(interruptTurn).mockResolvedValue({ result: { interrupted: true, processesStopped: 0 } });
+    await act(async () => {
       result.current.onTurnStarted("ws-1", "thread-1", "turn-2");
     });
-
     expect(pendingInterruptsRef.current.has("thread-1")).toBe(false);
     expect(interruptTurn).toHaveBeenCalledWith("ws-1", "thread-1", "turn-2");
-    expect(markProcessing).not.toHaveBeenCalled();
-    expect(setActiveTurnId).not.toHaveBeenCalled();
+    expect(markProcessing).toHaveBeenCalledWith("thread-1", true);
+    expect(setActiveTurnId).toHaveBeenCalledWith("thread-1", "turn-2");
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ text: "Session stopped." }));
   });
-
   it("clears pending interrupt and active turn on turn completed", () => {
     const { result, markProcessing, setActiveTurnId, pendingInterruptsRef } =
       makeOptions({ pendingInterrupts: ["thread-1"] });
@@ -931,4 +929,22 @@ describe("useThreadTurnEvents", () => {
     expect(markProcessing).not.toHaveBeenCalled();
   });
 
+  it("retains the native turn ID and reports queued stop failure without false success", async () => {
+    let reject!: (error: Error) => void;
+    vi.mocked(interruptTurn).mockReturnValue(new Promise((_resolve, fail) => { reject = fail; }));
+    const { result, dispatch, setActiveTurnId, pendingInterruptsRef, pushThreadErrorMessage } = makeOptions({ pendingInterrupts: ["thread-1"] });
+    act(() => {
+      result.current.onTurnStarted("ws-1", "thread-1", "native-turn");
+      result.current.onTurnStarted("ws-1", "thread-1", "native-turn");
+    });
+    expect(setActiveTurnId).toHaveBeenCalledWith("thread-1", "native-turn");
+    expect(interruptTurn).toHaveBeenCalledTimes(1);
+    expect(pendingInterruptsRef.current.has("thread-1")).toBe(true);
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ text: "Session stopped." }));
+    await act(async () => { reject(new Error("native stop failed")); });
+    expect(pendingInterruptsRef.current.has("thread-1")).toBe(false);
+    expect(pushThreadErrorMessage).toHaveBeenCalledWith("thread-1", expect.stringContaining("native stop failed"));
+    expect(setActiveTurnId).not.toHaveBeenCalledWith("thread-1", null);
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ text: "Session stopped." }));
+  });
 });

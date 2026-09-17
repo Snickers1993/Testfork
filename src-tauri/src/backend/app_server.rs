@@ -439,6 +439,8 @@ fn build_initialize_params(client_version: &str) -> Value {
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub(crate) struct WorkspaceSession {
+    pub(crate) command_turns: Mutex<crate::shared::turn_stop::CommandTurnRegistry>,
+    pub(crate) command_turns_changed: tokio::sync::Notify,
     pub(crate) session_id: String,
     pub(crate) codex_args: Option<String>,
     pub(crate) child: Mutex<Child>,
@@ -515,6 +517,18 @@ impl WorkspaceSession {
         method: &str,
         params: Value,
     ) -> Result<Value, String> {
+        // Serialize the check with begin_stop through the actual native write.
+        // Drop the ledger lock before awaiting the response so events can progress.
+        let work_guard = if matches!(
+            method,
+            "turn/start" | "turn/steer" | "review/start" | "thread/shellCommand"
+        ) {
+            let guard = self.command_turns.lock().await;
+            guard.check_request(method, &params)?;
+            Some(guard)
+        } else {
+            None
+        };
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.register_workspace(workspace_id).await;
@@ -540,6 +554,7 @@ impl WorkspaceSession {
             self.request_context.lock().await.remove(&id);
             return Err(error);
         }
+        drop(work_guard);
         match timeout(REQUEST_TIMEOUT, rx).await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(_)) => Err("request canceled".to_string()),
@@ -756,6 +771,7 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
     codex_home: Option<PathBuf>,
     client_version: String,
     event_sink: E,
+    process_cwd: PathBuf,
 ) -> Result<Arc<WorkspaceSession>, String> {
     let codex_bin = default_codex_bin;
     let _ = check_codex_installation(codex_bin.clone()).await?;
@@ -765,7 +781,7 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
         codex_args.as_deref(),
         vec!["app-server".to_string()],
     )?;
-    command.current_dir(&entry.path);
+    command.current_dir(process_cwd);
     if let Some(path) = codex_home.as_ref() {
         command.env("CODEX_HOME", path);
     }
@@ -779,6 +795,8 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
     let stderr = child.stderr.take().ok_or("missing stderr")?;
 
     let session = Arc::new(WorkspaceSession {
+        command_turns: Mutex::new(Default::default()),
+        command_turns_changed: tokio::sync::Notify::new(),
         session_id: uuid::Uuid::new_v4().to_string(),
         codex_args,
         child: Mutex::new(child),
@@ -824,6 +842,9 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
 
             if let Some(message) = value.as_object_mut() {
                 message.insert("moonveilSessionId".into(), json!(session_clone.session_id));
+            }
+            if session_clone.command_turns.lock().await.observe(&value) {
+                session_clone.command_turns_changed.notify_waiters();
             }
             let maybe_id = value.get("id").and_then(|id| id.as_u64());
             let has_method = value.get("method").is_some();

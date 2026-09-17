@@ -782,4 +782,72 @@ describe("useThreadMessaging telemetry", () => {
       "Review abcdef1: Tighten sidebar commit…",
     );
   });
+  function setupStop() {
+    const dispatch = vi.fn();
+    const markProcessing = vi.fn();
+    const setActiveTurnId = vi.fn();
+    const pushThreadErrorMessage = vi.fn();
+    const { result } = renderHook(() => useThreadMessaging({
+      activeWorkspace: workspace,
+      activeThreadId: "thread-1",
+      accessMode: "current",
+      model: null,
+      effort: null,
+      collaborationMode: null,
+      reviewDeliveryMode: "inline",
+      steerEnabled: false,
+      customPrompts: [],
+      threadStatusById: {},
+      activeTurnIdByThread: { "thread-1": "turn-1" },
+      rateLimitsByWorkspace: {},
+      pendingInterruptsRef: { current: new Set<string>() },
+      dispatch,
+      getCustomName: vi.fn(() => undefined),
+      markProcessing,
+      markReviewing: vi.fn(),
+      setActiveTurnId,
+      recordThreadActivity: vi.fn(),
+      safeMessageActivity: vi.fn(),
+      onDebug: vi.fn(),
+      pushThreadErrorMessage,
+      ensureThreadForActiveWorkspace: vi.fn(async () => "thread-1"),
+      ensureThreadForWorkspace: vi.fn(async () => "thread-1"),
+      refreshThread: vi.fn(async () => null),
+      forkThreadForWorkspace: vi.fn(async () => null),
+      updateThreadParent: vi.fn(),
+    }));
+    return { result, dispatch, markProcessing, setActiveTurnId, pushThreadErrorMessage };
+  }
+
+  it("waits for native process cleanup before reporting stopped and deduplicates clicks", async () => {
+    let complete!: (value: Awaited<ReturnType<typeof interruptTurnService>>) => void;
+    vi.mocked(interruptTurnService).mockReturnValue(new Promise((resolve) => { complete = resolve; }));
+    const { result, dispatch, markProcessing, setActiveTurnId } = setupStop();
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.interruptTurn(); });
+    await act(async () => { await result.current.interruptTurn(); });
+    expect(interruptTurnService).toHaveBeenCalledTimes(1);
+    expect(interruptTurnService).toHaveBeenCalledWith("ws-1", "thread-1", "turn-1");
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ text: "Session stopped." }));
+    expect(markProcessing).not.toHaveBeenCalled();
+    expect(setActiveTurnId).not.toHaveBeenCalled();
+    await act(async () => {
+      complete({ result: { interrupted: true, processesStopped: 1 } });
+      await pending;
+    });
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ text: "Session stopped." }));
+    expect(markProcessing).not.toHaveBeenCalled();
+    expect(setActiveTurnId).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ error: { message: "native termination failed" } }, "native termination failed"],
+    [{ result: {} }, "did not confirm"],
+  ])("shows unconfirmed stop for native error or incomplete confirmation", async (response, expected) => {
+    vi.mocked(interruptTurnService).mockResolvedValue(response);
+    const { result, dispatch, pushThreadErrorMessage } = setupStop();
+    await act(async () => { await result.current.interruptTurn(); });
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ text: "Session stopped." }));
+    expect(pushThreadErrorMessage).toHaveBeenCalledWith("thread-1", expect.stringContaining(expected));
+  });
 });
